@@ -1,0 +1,175 @@
+{
+  "rabbitmq_version": "3.12.0",
+  "rabbitmq_plugins": ["rabbitmq_management"],
+  "users": [
+    {
+      "name": "raguser",
+      "password_hash": "q83vAdVpUjZ9uaV8ckW6L9RQMODfT9QTLpIp4l2S86F2eS6l",
+      "hashing_algorithm": "rabbit_password_hashing_sha256",
+      "tags": "administrator"
+    }
+  ],
+  "permissions": [
+    {
+      "user": "raguser",
+      "vhost": "/",
+      "configure": ".*",
+      "write": ".*",
+      "read": ".*"
+    }
+  ],
+  "vhosts": [
+    {"name": "/"}
+  ],
+  "exchanges": [
+    {
+      "name": "rag.ingestion",
+      "vhost": "/",
+      "type": "direct",
+      "durable": true,
+      "auto_delete": false,
+      "internal": false,
+      "arguments": {}
+    },
+    {
+      "name": "rag.ocr",
+      "vhost": "/",
+      "type": "direct",
+      "durable": true,
+      "auto_delete": false,
+      "internal": false,
+      "arguments": {}
+    },
+    {
+      "name": "rag.embedding",
+      "vhost": "/",
+      "type": "direct",
+      "durable": true,
+      "auto_delete": false,
+      "internal": false,
+      "arguments": {}
+    },
+    {
+      "name": "rag.priority",
+      "vhost": "/",
+      "type": "headers",
+      "durable": true,
+      "auto_delete": false,
+      "internal": false,
+      "arguments": {}
+    }
+  ],
+  "queues": [
+    {
+      "name": "ingestion_queue",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-dead-letter-exchange": "rag.ingestion",
+        "x-dead-letter-routing-key": "ingest.dead",
+        "x-max-priority": 10
+      }
+    },
+    {
+      "name": "ingestion_dlq",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {}
+    },
+    {
+      "name": "ocr_queue",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-dead-letter-exchange": "rag.ocr",
+        "x-dead-letter-routing-key": "ocr.dead"
+      }
+    },
+    {
+      "name": "ocr_dlq",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {}
+    },
+    {
+      "name": "embedding_queue",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-dead-letter-exchange": "rag.embedding",
+        "x-dead-letter-routing-key": "embed.dead"
+      }
+    },
+    {
+      "name": "embedding_dlq",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {}
+    },
+    {
+      "name": "ingestion_priority_queue",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-max-priority": 10
+      }
+    }
+  ],
+  "bindings": [
+    {
+      "source": "rag.ingestion",
+      "vhost": "/",
+      "destination": "ingestion_queue",
+      "destination_type": "queue",
+      "routing_key": "ingest.new",
+      "arguments": {}
+    },
+    {
+      "source": "rag.ingestion",
+      "vhost": "/",
+      "destination": "ingestion_dlq",
+      "destination_type": "queue",
+      "routing_key": "ingest.dead",
+      "arguments": {}
+    },
+    {
+      "source": "rag.ocr",
+      "vhost": "/",
+      "destination": "ocr_queue",
+      "destination_type": "queue",
+      "routing_key": "ocr.process",
+      "arguments": {}
+    },
+    {
+      "source": "rag.ocr",
+      "vhost": "/",
+      "destination": "ocr_dlq",
+      "destination_type": "queue",
+      "routing_key": "ocr.dead",
+      "arguments": {}
+    },
+    {
+      "source": "rag.embedding",
+      "vhost": "/",
+      "destination": "embedding_queue",
+      "destination_type": "queue",
+      "routing_key": "embed.chunk",
+      "arguments": {}
+    },
+    {
+      "source": "rag.embedding",
+      "vhost": "/",
+      "destination": "embedding_dlq",
+      "destination_type": "queue",
+      "routing_key": "embed.dead",
+      "arguments": {}
+    }
+  ]
+}

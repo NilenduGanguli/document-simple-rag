@@ -1,0 +1,288 @@
+"""
+RecursiveCharacterSplitter — Section 9 of the design document.
+
+Strategy
+--------
+1. Attempt to split `text` using a priority-ordered list of separators
+   ("\n\n", "\n", ". ", " ", "").  Work through separators from coarse to fine.
+2. Recursively split any piece that still exceeds max_tokens.
+3. Merge the resulting short segments into final Chunks of at most max_tokens
+   with overlap_tokens of context carried over from one chunk to the next.
+
+Token counting uses BertTokenizerFast (bert-base-multilingual-cased by default)
+loaded once at class instantiation.  The tokenizer is CPU-only and thread-safe
+for read operations.
+
+Environment variables
+---------------------
+CHUNK_MAX_TOKENS      Maximum tokens per chunk           (default: 512)
+CHUNK_OVERLAP_TOKENS  Overlap tokens between chunks      (default: 50)
+TOKENIZER_MODEL       HuggingFace tokenizer model name   (default: bert-base-multilingual-cased)
+"""
+
+import os
+import logging
+from typing import List, Tuple
+
+from transformers import BertTokenizerFast
+
+from .base import BaseChunkStrategy, Chunk
+
+logger = logging.getLogger(__name__)
+
+# Type alias: (segment_text, abs_char_start, abs_char_end)
+_Segment = Tuple[str, int, int]
+
+
+class RecursiveCharacterSplitter(BaseChunkStrategy):
+    """
+    Recursively splits text using a priority-ordered separator list, then
+    merges segments into overlapping chunks bounded by max_tokens.
+    """
+
+    DEFAULT_SEPARATORS: List[str] = ["\n\n", "\n", ". ", " ", ""]
+
+    def __init__(self) -> None:
+        self.max_tokens: int = int(os.getenv("CHUNK_MAX_TOKENS", "512"))
+        self.overlap_tokens: int = int(os.getenv("CHUNK_OVERLAP_TOKENS", "50"))
+
+        model_name = os.getenv("TOKENIZER_MODEL", "bert-base-multilingual-cased")
+        try:
+            self._tokenizer = BertTokenizerFast.from_pretrained(model_name)
+            logger.info(
+                f"RecursiveCharacterSplitter: tokenizer loaded "
+                f"(model={model_name}, max_tokens={self.max_tokens}, "
+                f"overlap={self.overlap_tokens})"
+            )
+        except Exception as exc:
+            fallback = "bert-base-uncased"
+            logger.warning(
+                f"Could not load tokenizer '{model_name}': {exc}. "
+                f"Falling back to '{fallback}'."
+            )
+            self._tokenizer = BertTokenizerFast.from_pretrained(fallback)
+
+    # ------------------------------------------------------------------
+    # Public interface (BaseChunkStrategy)
+    # ------------------------------------------------------------------
+
+    def split(self, text: str, **kwargs) -> List[Chunk]:
+        """
+        Split `text` into a list of Chunk objects.
+
+        Parameters
+        ----------
+        text: Full document text (already cleaned by TextPreprocessor).
+
+        Returns
+        -------
+        Ordered list of Chunk dataclasses with char_start / char_end pointing
+        into the original `text` string.
+        """
+        if not text or not text.strip():
+            return []
+
+        segments = self._recursive_split(text, self.DEFAULT_SEPARATORS, text_offset=0)
+        return self._merge_into_chunks(segments)
+
+    # ------------------------------------------------------------------
+    # Token counting
+    # ------------------------------------------------------------------
+
+    def _count_tokens(self, text: str) -> int:
+        """
+        Count BERT sub-word tokens in `text` without special tokens ([CLS]/[SEP]).
+        Thread-safe for concurrent read access to the tokenizer.
+        """
+        return len(self._tokenizer.encode(text, add_special_tokens=False))
+
+    # ------------------------------------------------------------------
+    # Recursive splitting
+    # ------------------------------------------------------------------
+
+    def _recursive_split(
+        self, text: str, separators: List[str], text_offset: int
+    ) -> List[_Segment]:
+        """
+        Recursively decompose `text` into segments that each fit within
+        max_tokens.  Preserves absolute character offsets relative to the
+        original full document text.
+
+        Parameters
+        ----------
+        text:        Slice of text to split.
+        separators:  Remaining separators to try (most coarse first).
+        text_offset: Byte offset of text[0] in the original document string.
+
+        Returns
+        -------
+        List of (segment_text, abs_char_start, abs_char_end) tuples.
+        """
+        if not text:
+            return []
+
+        # The text already fits — return it as a single segment.
+        if self._count_tokens(text) <= self.max_tokens:
+            return [(text, text_offset, text_offset + len(text))]
+
+        # No separators left — fall back to binary character halving.
+        if not separators:
+            return self._split_by_char_halving(text, text_offset)
+
+        separator = separators[0]
+        remaining = separators[1:]
+
+        # Empty-string separator is the final fallback when all word/line
+        # separators have been exhausted.
+        if separator == "":
+            return self._split_by_char_halving(text, text_offset)
+
+        raw_parts = text.split(separator)
+        result: List[_Segment] = []
+        current_offset = text_offset
+
+        for part in raw_parts:
+            if part:
+                part_end = current_offset + len(part)
+                if self._count_tokens(part) <= self.max_tokens:
+                    result.append((part, current_offset, part_end))
+                else:
+                    # Recurse with a finer-grained separator.
+                    sub_segments = self._recursive_split(part, remaining, current_offset)
+                    result.extend(sub_segments)
+
+            # Advance past the part content AND the separator character(s).
+            current_offset += len(part) + len(separator)
+
+        return result
+
+    def _split_by_char_halving(self, text: str, text_offset: int) -> List[_Segment]:
+        """
+        Last-resort split: recursively halve `text` at the midpoint until
+        each half fits within max_tokens.  Guarantees termination because
+        each call halves the input length (bottom out at a single character).
+        """
+        if not text:
+            return []
+
+        if self._count_tokens(text) <= self.max_tokens:
+            return [(text, text_offset, text_offset + len(text))]
+
+        mid = len(text) // 2
+        left = text[:mid]
+        right = text[mid:]
+
+        return self._split_by_char_halving(
+            left, text_offset
+        ) + self._split_by_char_halving(
+            right, text_offset + mid
+        )
+
+    # ------------------------------------------------------------------
+    # Merging segments into overlapping chunks
+    # ------------------------------------------------------------------
+
+    def _merge_into_chunks(self, segments: List[_Segment]) -> List[Chunk]:
+        """
+        Merge short segments into Chunks of at most max_tokens with a
+        sliding-window overlap strategy.
+
+        Algorithm
+        ---------
+        Maintain a `window` (ordered list of segments) and a running
+        `window_tokens` count.
+
+        For each incoming segment:
+          - If it fits in the window: append and continue.
+          - If it would overflow: emit the current window as a Chunk, then
+            pop segments from the *front* of the window until the remaining
+            token count is <= overlap_tokens.  Do NOT advance the segment
+            pointer so the overflowing segment is retried on the next
+            iteration with the trimmed window.
+
+        After the loop, emit any remaining window content as the final Chunk.
+
+        Character positions
+        -------------------
+        char_start = first segment's absolute start offset.
+        char_end   = last  segment's absolute end  offset.
+        These refer to the original document string, not the joined chunk_text.
+        """
+        if not segments:
+            return []
+
+        chunks: List[Chunk] = []
+        chunk_index: int = 0
+
+        window: List[_Segment] = []   # segments currently in the active window
+        window_tokens: int = 0
+
+        i = 0
+        while i < len(segments):
+            seg_text, seg_start, seg_end = segments[i]
+            seg_tokens = self._count_tokens(seg_text)
+
+            if window and (window_tokens + seg_tokens > self.max_tokens):
+                # ---- Emit current window ----------------------------------------
+                chunk_text = " ".join(s[0] for s in window)
+                char_start = window[0][1]
+                char_end = window[-1][2]
+
+                chunks.append(
+                    Chunk(
+                        chunk_index=chunk_index,
+                        chunk_text=chunk_text,
+                        char_start=char_start,
+                        char_end=char_end,
+                        token_count=window_tokens,
+                    )
+                )
+                chunk_index += 1
+                logger.debug(
+                    f"Chunk {chunk_index - 1}: [{char_start}:{char_end}] "
+                    f"{window_tokens} tokens"
+                )
+
+                # ---- Trim front of window to at most overlap_tokens -----------
+                while window and window_tokens > self.overlap_tokens:
+                    removed_text = window.pop(0)[0]
+                    window_tokens -= self._count_tokens(removed_text)
+                    # Guard against token count going negative due to estimation
+                    if window_tokens < 0:
+                        window_tokens = 0
+
+                # Do NOT advance i — the overflowing segment will be re-evaluated
+                # in the next iteration with the trimmed window.
+
+            else:
+                # ---- Segment fits: add to window --------------------------------
+                window.append((seg_text, seg_start, seg_end))
+                window_tokens += seg_tokens
+                i += 1
+
+        # ---- Emit the remaining window as the last chunk ----------------------
+        if window:
+            chunk_text = " ".join(s[0] for s in window)
+            char_start = window[0][1]
+            char_end = window[-1][2]
+
+            chunks.append(
+                Chunk(
+                    chunk_index=chunk_index,
+                    chunk_text=chunk_text,
+                    char_start=char_start,
+                    char_end=char_end,
+                    token_count=window_tokens,
+                )
+            )
+            logger.debug(
+                f"Final chunk {chunk_index}: [{char_start}:{char_end}] "
+                f"{window_tokens} tokens"
+            )
+
+        logger.info(
+            f"RecursiveCharacterSplitter: {len(segments)} segments -> "
+            f"{len(chunks)} chunks "
+            f"(max_tokens={self.max_tokens}, overlap={self.overlap_tokens})"
+        )
+        return chunks

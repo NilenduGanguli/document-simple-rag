@@ -1,0 +1,365 @@
+services:
+
+  # ---------------------------------------------------------------------------
+  # Infrastructure
+  # ---------------------------------------------------------------------------
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: raguser
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ragdb
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./infra/postgres/01_init.sql:/docker-entrypoint-initdb.d/01_init.sql:ro
+    ports:
+      - "15432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U raguser -d ragdb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - rag-network
+
+  redis:
+    image: redis:7.2-alpine
+    restart: unless-stopped
+    command: ["redis-server", "/usr/local/etc/redis/redis.conf"]
+    volumes:
+      - redis_data:/data
+      - ./infra/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
+    ports:
+      - "16379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - rag-network
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASS}
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+      - ./infra/rabbitmq/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
+      - ./infra/rabbitmq/definitions.json:/etc/rabbitmq/definitions.json:ro
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+    networks:
+      - rag-network
+
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address :9001
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    volumes:
+      - minio_data:/data
+    ports:
+      - "19000:9000"
+      - "19001:9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks:
+      - rag-network
+
+  minio-init:
+    image: minio/mc:latest
+    restart: "no"
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: /bin/sh /init.sh
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    volumes:
+      - ./infra/minio/init.sh:/init.sh:ro
+    networks:
+      - rag-network
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.57
+    restart: unless-stopped
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686"
+      - "4317:4317"
+    networks:
+      - rag-network
+
+  prometheus:
+    image: prom/prometheus:v2.52.0
+    restart: unless-stopped
+    volumes:
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    networks:
+      - rag-network
+
+  grafana:
+    image: grafana/grafana:10.4.0
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD}
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infra/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "3000:3000"
+    networks:
+      - rag-network
+
+  # ---------------------------------------------------------------------------
+  # Application Services
+  # ---------------------------------------------------------------------------
+
+  model-init:
+    build:
+      context: .
+      dockerfile: services/model-init/Dockerfile
+    restart: "no"
+    environment:
+      MODEL_DEST: /models
+      HF_MODEL_NAME: bert-base-multilingual-cased
+      FORCE_REINIT: ${FORCE_MODEL_REINIT:-false}
+      HF_HUB_CACHE: /models/_hf_cache
+    volumes:
+      - models_volume:/models
+    networks:
+      - rag-network
+
+  ingest-api:
+    build:
+      context: .
+      dockerfile: services/ingest-api/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: postgresql://raguser:${POSTGRES_PASSWORD}@postgres:5432/ragdb
+      REDIS_URL: redis://redis:6379/0
+      RABBITMQ_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASS}@rabbitmq:5672/
+      S3_ENDPOINT_URL: http://minio:9000
+      S3_ACCESS_KEY: ${MINIO_ROOT_USER}
+      S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+      S3_BUCKET: rag-documents
+      MAX_FILE_SIZE_MB: "500"
+      API_KEYS: ${API_KEYS}
+      JAEGER_ENDPOINT: http://jaeger:4317
+      OTEL_SERVICE_NAME: ingest-api
+    ports:
+      - "18000:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks:
+      - rag-network
+
+  ingestion-worker:
+    build:
+      context: .
+      dockerfile: services/ingestion-worker/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      model-init:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: postgresql://raguser:${POSTGRES_PASSWORD}@postgres:5432/ragdb
+      REDIS_URL: redis://redis:6379/0
+      RABBITMQ_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASS}@rabbitmq:5672/
+      S3_ENDPOINT_URL: http://minio:9000
+      S3_ACCESS_KEY: ${MINIO_ROOT_USER}
+      S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+      S3_BUCKET: rag-documents
+      MAX_FILE_SIZE_MB: "500"
+      JAEGER_ENDPOINT: http://jaeger:4317
+      OTEL_SERVICE_NAME: ingestion-worker
+      WORKER_CONCURRENCY: "6"
+      TOKENIZERS_PARALLELISM: "false"
+      TOKENIZER_MODEL: /models/embedding/int8
+    volumes:
+      - models_volume:/models:ro
+    networks:
+      - rag-network
+
+  ocr-service:
+    build:
+      context: .
+      dockerfile: services/ocr-service/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      RABBITMQ_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASS}@rabbitmq:5672/
+      TESSDATA_PREFIX: /usr/share/tesseract-ocr/5/tessdata
+      OMP_THREAD_LIMIT: "2"
+      JAEGER_ENDPOINT: http://jaeger:4317
+      OTEL_SERVICE_NAME: ocr-service
+      USE_OCR_API: ${USE_OCR_API:-false}
+      OCR_API_URL: http://ocr-api:8002/ocr
+    networks:
+      - rag-network
+
+  ocr-api:
+    build:
+      context: ./ocr-api
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+    ports:
+      - "8002:8002"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/docs"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+    networks:
+      - rag-network
+
+  embedding-service:
+    build:
+      context: .
+      dockerfile: services/embedding-service/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      model-init:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: postgresql://raguser:${POSTGRES_PASSWORD}@postgres:5432/ragdb
+      REDIS_URL: redis://redis:6379/1
+      RABBITMQ_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASS}@rabbitmq:5672/
+      MODEL_DEST: /models
+      MODEL_VERSION: local-docker-compose
+      ONNX_POOL_SIZE: "2"
+      ONNX_THREADS_PER_SESSION: "2"
+      EMBEDDING_BATCH_SIZE: "16"
+      OMP_NUM_THREADS: "2"
+      OMP_WAIT_POLICY: PASSIVE
+      MKL_NUM_THREADS: "2"
+      GOMP_SPINCOUNT: "0"
+      TOKENIZERS_PARALLELISM: "false"
+      PREFETCH_QUEUE_SIZE: "4"
+      JAEGER_ENDPOINT: http://jaeger:4317
+      OTEL_SERVICE_NAME: embedding-service
+    volumes:
+      - models_volume:/models:ro
+    networks:
+      - rag-network
+
+  retrieval-api:
+    build:
+      context: .
+      dockerfile: services/retrieval-api/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      model-init:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: postgresql://raguser:${POSTGRES_PASSWORD}@postgres:5432/ragdb
+      REDIS_URL: redis://redis:6379/2
+      MODEL_DEST: /models
+      MODEL_VERSION: local-docker-compose
+      ONNX_POOL_SIZE: "1"
+      ONNX_THREADS_PER_SESSION: "2"
+      BM25_REFRESH_INTERVAL_SECONDS: "300"
+      API_KEYS: ${API_KEYS}
+      JAEGER_ENDPOINT: http://jaeger:4317
+      OTEL_SERVICE_NAME: retrieval-api
+      TOKENIZERS_PARALLELISM: "false"
+    volumes:
+      - models_volume:/models:ro
+    ports:
+      - "18001:8001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/api/v1/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks:
+      - rag-network
+
+# -----------------------------------------------------------------------------
+# Named Volumes
+# -----------------------------------------------------------------------------
+
+volumes:
+  postgres_data:
+  redis_data:
+  rabbitmq_data:
+  minio_data:
+  prometheus_data:
+  grafana_data:
+  models_volume:
+
+# -----------------------------------------------------------------------------
+# Networks
+# -----------------------------------------------------------------------------
+
+networks:
+  rag-network:
+    driver: bridge

@@ -1,0 +1,41 @@
+from pydantic import BaseModel, Field
+from typing import Optional, Dict, Any
+from datetime import datetime
+
+
+class IngestResponse(BaseModel):
+    document_id: str
+    status: str
+    message: str
+
+
+class DocumentStatus(BaseModel):
+    document_id: str
+    filename: str
+    status: str
+    page_count: Optional[int] = None
+    has_text: bool = False
+    has_images: bool = False
+    language_detected: Optional[str] = None
+    s3_uri: Optional[str] = None
+    error_message: Optional[str] = None
+    retry_count: int = 0
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+
+
+class ChunkItem(BaseModel):
+    chunk_id: str
+    chunk_index: int
+    chunk_text: str
+    page_number: Optional[int] = None
+    source_type: str = 'text'
+    token_count: Optional[int] = None
+    embedding_status: str = 'pending'
+
+
+class ChunksResponse(BaseModel):
+    document_id: str
+    total_chunks: int
+    chunks: list[ChunkItem]
