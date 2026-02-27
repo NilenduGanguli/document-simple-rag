@@ -36,11 +36,15 @@ from rag_shared.cache.redis_client import create_redis_client, close_redis
 from rag_shared.onnx.session_pool import ONNXSessionPool
 from rag_shared.logging.setup import configure_structlog
 from rag_shared.metrics import get_metrics_app
+from rag_shared.tracing.otel import configure_tracer
+from rag_shared.storage.s3_client import S3Client
 
 from app.bm25_manager import BM25Manager
 from app.pipeline.reranker import build_reranker
 from app.pipeline.query_preprocessor import build_query_preprocessor
 from app.routers.retrieve import router as retrieve_router
+from app.routers.documents import router as documents_router
+from app.routers.stats import router as stats_router
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -62,6 +66,7 @@ async def lifespan(app: FastAPI):
     global _ready
 
     configure_structlog(service_name='retrieval-api')
+    configure_tracer(settings.otel_service_name or "retrieval-api", settings.jaeger_endpoint)
     logger.info("Retrieval API starting up")
 
     # ── 1. Database pool ────────────────────────────────────────────────────
@@ -114,7 +119,20 @@ async def lifespan(app: FastAPI):
     await bm25_mgr.build()
     app.state.bm25_manager = bm25_mgr
 
-    # ── 5. Start BM25 refresh background task ──────────────────────────────
+    # ── 6. S3 client for presigned URLs ──────────────────────────────────
+    if settings.s3_endpoint_url:
+        app.state.s3_client = S3Client(
+            access_key=settings.s3_access_key,
+            secret_key=settings.s3_secret_key,
+            region=settings.s3_region,
+            endpoint_url=settings.s3_endpoint_url,
+        )
+        logger.info("S3 client initialized")
+    else:
+        app.state.s3_client = None
+        logger.warning("S3_ENDPOINT_URL not set — presigned URLs unavailable")
+
+    # ── 7. Start BM25 refresh background task ──────────────────────────────
     shutdown_event = asyncio.Event()
     _shutdown_event_holder = shutdown_event  # keep reference for shutdown
 
@@ -197,6 +215,15 @@ app.mount("/metrics", get_metrics_app())
 
 # Include retrieval routes
 app.include_router(retrieve_router, prefix="/api/v1")
+app.include_router(documents_router, prefix="/api/v1")
+app.include_router(stats_router, prefix="/api/v1")
+
+# OpenTelemetry FastAPI auto-instrumentation (requires opentelemetry-instrumentation-fastapi)
+try:
+    from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+    FastAPIInstrumentor().instrument_app(app)
+except ImportError:
+    pass
 
 
 # ──────────────────────────────────────────────────────────────────────────────

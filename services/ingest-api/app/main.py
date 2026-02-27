@@ -75,6 +75,13 @@ app.mount("/metrics", metrics_app)
 # Include routers
 app.include_router(documents.router, prefix="/api/v1")
 
+# OpenTelemetry FastAPI auto-instrumentation (requires opentelemetry-instrumentation-fastapi)
+try:
+    from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+    FastAPIInstrumentor().instrument_app(app)
+except ImportError:
+    pass
+
 
 @app.get("/api/v1/health")
 async def health(request: Request):

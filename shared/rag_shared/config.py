@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     s3_secret_key: str = Field(default="minioadmin123")
     s3_bucket: str = Field(default="rag-documents")
     s3_region: str = Field(default="us-east-1")
+    s3_external_url: Optional[str] = Field(default=None)
 
     # API Keys (comma-separated)
     api_keys: str = Field(default="dev-api-key-1")

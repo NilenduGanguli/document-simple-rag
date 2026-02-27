@@ -22,7 +22,8 @@ TOKENIZER_MODEL       HuggingFace tokenizer model name   (default: bert-base-mul
 
 import os
 import logging
-from typing import List, Tuple
+from collections import deque
+from typing import List, Tuple, Dict
 
 from transformers import BertTokenizerFast
 
@@ -32,6 +33,8 @@ logger = logging.getLogger(__name__)
 
 # Type alias: (segment_text, abs_char_start, abs_char_end)
 _Segment = Tuple[str, int, int]
+# Window entry: (segment_text, abs_char_start, abs_char_end, token_count)
+_WindowEntry = Tuple[str, int, int, int]
 
 
 class RecursiveCharacterSplitter(BaseChunkStrategy):
@@ -62,6 +65,10 @@ class RecursiveCharacterSplitter(BaseChunkStrategy):
             )
             self._tokenizer = BertTokenizerFast.from_pretrained(fallback)
 
+        # Per-call token count cache — cleared at the start of each split() call
+        # so memory doesn't accumulate across documents.
+        self._token_cache: Dict[str, int] = {}
+
     # ------------------------------------------------------------------
     # Public interface (BaseChunkStrategy)
     # ------------------------------------------------------------------
@@ -82,19 +89,61 @@ class RecursiveCharacterSplitter(BaseChunkStrategy):
         if not text or not text.strip():
             return []
 
+        # Clear cache at the start of each document to release memory.
+        self._token_cache.clear()
+
         segments = self._recursive_split(text, self.DEFAULT_SEPARATORS, text_offset=0)
-        return self._merge_into_chunks(segments)
+        result = self._merge_into_chunks(segments)
+
+        # Release cache memory after processing.
+        self._token_cache.clear()
+        return result
 
     # ------------------------------------------------------------------
     # Token counting
     # ------------------------------------------------------------------
 
+    # Conservative upper bound: BERT WordPiece averages about 4 chars per token
+    # for English text.  We use a tighter 3-char estimate so we only skip the
+    # tokenizer call when the text is genuinely "obviously too long" (>3×512 chars
+    # = >1536 chars), keeping false-positive skips minimal.
+    _CHARS_PER_TOKEN_LOWER_BOUND = 3
+
+    def _fits_in_max_tokens(self, text: str) -> bool:
+        """
+        Return True if `text` fits within max_tokens.
+
+        Uses a cheap character-count pre-check to avoid calling the tokenizer
+        on very long texts (which can cause memory spikes in the Rust backend
+        for inputs far exceeding 512 tokens).  Only falls through to the actual
+        tokenizer when the text is short enough to plausibly fit.
+        """
+        # If the character count is so high that even the most generous
+        # chars-per-token estimate puts us over max_tokens, skip tokenization.
+        if len(text) > self.max_tokens * self._CHARS_PER_TOKEN_LOWER_BOUND:
+            return False
+
+        cached = self._token_cache.get(text)
+        if cached is not None:
+            return cached <= self.max_tokens
+
+        count = len(self._tokenizer.encode(text, add_special_tokens=False))
+        self._token_cache[text] = count
+        return count <= self.max_tokens
+
     def _count_tokens(self, text: str) -> int:
         """
         Count BERT sub-word tokens in `text` without special tokens ([CLS]/[SEP]).
+        Results are cached per split() call to avoid redundant tokenizer calls
+        on the same text fragment (which occurs 3-4x without caching).
         Thread-safe for concurrent read access to the tokenizer.
         """
-        return len(self._tokenizer.encode(text, add_special_tokens=False))
+        cached = self._token_cache.get(text)
+        if cached is not None:
+            return cached
+        count = len(self._tokenizer.encode(text, add_special_tokens=False))
+        self._token_cache[text] = count
+        return count
 
     # ------------------------------------------------------------------
     # Recursive splitting
@@ -122,7 +171,7 @@ class RecursiveCharacterSplitter(BaseChunkStrategy):
             return []
 
         # The text already fits — return it as a single segment.
-        if self._count_tokens(text) <= self.max_tokens:
+        if self._fits_in_max_tokens(text):
             return [(text, text_offset, text_offset + len(text))]
 
         # No separators left — fall back to binary character halving.
@@ -144,7 +193,7 @@ class RecursiveCharacterSplitter(BaseChunkStrategy):
         for part in raw_parts:
             if part:
                 part_end = current_offset + len(part)
-                if self._count_tokens(part) <= self.max_tokens:
+                if self._fits_in_max_tokens(part):
                     result.append((part, current_offset, part_end))
                 else:
                     # Recurse with a finer-grained separator.
@@ -165,7 +214,7 @@ class RecursiveCharacterSplitter(BaseChunkStrategy):
         if not text:
             return []
 
-        if self._count_tokens(text) <= self.max_tokens:
+        if self._fits_in_max_tokens(text):
             return [(text, text_offset, text_offset + len(text))]
 
         mid = len(text) // 2
@@ -189,8 +238,8 @@ class RecursiveCharacterSplitter(BaseChunkStrategy):
 
         Algorithm
         ---------
-        Maintain a `window` (ordered list of segments) and a running
-        `window_tokens` count.
+        Maintain a `window` (deque of (text, start, end, token_count)) and a
+        running `window_tokens` count.
 
         For each incoming segment:
           - If it fits in the window: append and continue.
@@ -200,7 +249,8 @@ class RecursiveCharacterSplitter(BaseChunkStrategy):
             pointer so the overflowing segment is retried on the next
             iteration with the trimmed window.
 
-        After the loop, emit any remaining window content as the final Chunk.
+        Token counts are stored inside the window entries so the trim loop
+        does not need to re-call _count_tokens on already-counted segments.
 
         Character positions
         -------------------
@@ -214,7 +264,8 @@ class RecursiveCharacterSplitter(BaseChunkStrategy):
         chunks: List[Chunk] = []
         chunk_index: int = 0
 
-        window: List[_Segment] = []   # segments currently in the active window
+        # deque of (text, abs_start, abs_end, token_count)
+        window: deque[_WindowEntry] = deque()
         window_tokens: int = 0
 
         i = 0
@@ -244,9 +295,10 @@ class RecursiveCharacterSplitter(BaseChunkStrategy):
                 )
 
                 # ---- Trim front of window to at most overlap_tokens -----------
+                # Use stored token count from window entry — no extra _count_tokens call.
                 while window and window_tokens > self.overlap_tokens:
-                    removed_text = window.pop(0)[0]
-                    window_tokens -= self._count_tokens(removed_text)
+                    removed = window.popleft()
+                    window_tokens -= removed[3]
                     # Guard against token count going negative due to estimation
                     if window_tokens < 0:
                         window_tokens = 0
@@ -256,7 +308,7 @@ class RecursiveCharacterSplitter(BaseChunkStrategy):
 
             else:
                 # ---- Segment fits: add to window --------------------------------
-                window.append((seg_text, seg_start, seg_end))
+                window.append((seg_text, seg_start, seg_end, seg_tokens))
                 window_tokens += seg_tokens
                 i += 1
 

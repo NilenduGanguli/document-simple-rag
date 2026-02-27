@@ -79,6 +79,7 @@ CREATE TABLE chunk_embeddings (
     created_at         TIMESTAMPTZ DEFAULT now()
 );
 CREATE INDEX idx_emb_chunk ON chunk_embeddings(chunk_id);
+CREATE UNIQUE INDEX uq_emb_chunk_id ON chunk_embeddings(chunk_id);
 CREATE INDEX idx_emb_hnsw ON chunk_embeddings
     USING hnsw (embedding vector_cosine_ops) WITH (m=32, ef_construction=200);
 -- Note: IVFFlat index requires data to be loaded first; create after initial data load.

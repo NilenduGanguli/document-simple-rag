@@ -1,5 +1,5 @@
 .PHONY: help build up down logs restart clean migrate-check test-health \
-        shell-postgres shell-redis ps model-reinit
+        shell-postgres shell-redis ps model-reinit build-frontend
 
 # Default target
 help:
@@ -16,6 +16,8 @@ help:
 	@echo "  logs           Follow logs for all services"
 	@echo "  logs-app       Follow logs for application services only"
 	@echo "  ps             Show running containers"
+	@echo "  build-frontend Build the frontend Docker image only"
+	@echo "  logs-frontend  Follow logs for the frontend service"
 	@echo "  restart        Restart all application services"
 	@echo "  clean          Remove containers, volumes, and built images"
 	@echo "  model-reinit   Force re-download and re-quantize ONNX models"
@@ -42,12 +44,16 @@ build: .env
 build-no-cache: .env
 	docker compose build --no-cache --parallel
 
+build-frontend: .env
+	docker compose build frontend
+
 # ─── Lifecycle ──────────────────────────────────────────────────────────────────
 
 up: .env
 	docker compose up -d
 	@echo ""
 	@echo "Stack is starting. Run 'make logs' to follow progress."
+	@echo "  Frontend:      http://localhost:3001"
 	@echo "  Ingest API:    http://localhost:18000/docs"
 	@echo "  Retrieval API: http://localhost:18001/docs"
 	@echo "  OCR API:       http://localhost:8002/docs"
@@ -72,7 +78,10 @@ logs:
 	docker compose logs -f
 
 logs-app:
-	docker compose logs -f ingest-api ingestion-worker ocr-service embedding-service retrieval-api
+	docker compose logs -f ingest-api ingestion-worker ocr-service embedding-service retrieval-api frontend
+
+logs-frontend:
+	docker compose logs -f frontend
 
 logs-infra:
 	docker compose logs -f postgres redis rabbitmq minio
@@ -85,7 +94,7 @@ ps:
 # ─── Restart ────────────────────────────────────────────────────────────────────
 
 restart:
-	docker compose restart ingest-api ingestion-worker ocr-service embedding-service retrieval-api
+	docker compose restart ingest-api ingestion-worker ocr-service embedding-service retrieval-api frontend
 
 restart-all:
 	docker compose restart

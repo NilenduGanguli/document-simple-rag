@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from typing import List
+from typing import Dict, List
 
 from rank_bm25 import BM25Okapi
 
@@ -38,6 +38,7 @@ class BM25Manager:
         # These are replaced atomically on each refresh
         self._index: BM25Okapi | None = None
         self._chunk_ids: List[str] = []
+        self._chunk_meta: Dict[str, dict] = {}  # chunk_id → {chunk_text, parent_document_id, ...}
         self._index_size: int = 0
 
         # Timing
@@ -64,8 +65,13 @@ class BM25Manager:
         BM25 sparse search.
 
         Returns up to *k* results as dicts containing:
-          - chunk_id   (str)
-          - bm25_score (float, raw BM25 score)
+          - chunk_id             (str)
+          - bm25_score           (float, raw BM25 score)
+          - chunk_text           (str, from index cache)
+          - parent_document_id   (str, from index cache)
+          - chunk_index          (int)
+          - page_number          (int | None)
+          - source_type          (str)
 
         Returns an empty list if the index is not yet built.
         """
@@ -89,10 +95,17 @@ class BM25Manager:
             if score <= 0.0:
                 break  # BM25Okapi scores can hit 0; stop early
             if idx < len(self._chunk_ids):
+                cid = self._chunk_ids[idx]
+                meta = self._chunk_meta.get(cid, {})
                 results.append(
                     {
-                        "chunk_id": self._chunk_ids[idx],
+                        "chunk_id": cid,
                         "bm25_score": float(score),
+                        "chunk_text": meta.get("chunk_text", ""),
+                        "parent_document_id": meta.get("parent_document_id", ""),
+                        "chunk_index": meta.get("chunk_index", 0),
+                        "page_number": meta.get("page_number"),
+                        "source_type": meta.get("source_type", "text"),
                     }
                 )
         return results
@@ -144,6 +157,18 @@ class BM25Manager:
         chunk_ids = [r['chunk_id'] for r in rows]
         corpus = [r['chunk_text'].split() for r in rows]
 
+        # Build chunk metadata lookup for enriching sparse-only search results
+        new_meta = {
+            r['chunk_id']: {
+                'chunk_text': r.get('chunk_text', ''),
+                'parent_document_id': r.get('parent_document_id', ''),
+                'chunk_index': r.get('chunk_index', 0),
+                'page_number': r.get('page_number'),
+                'source_type': r.get('source_type', 'text'),
+            }
+            for r in rows
+        }
+
         # Build index (CPU-bound; runs in the event loop — acceptable because
         # BM25Okapi construction is fast even for millions of docs)
         new_index = BM25Okapi(corpus)
@@ -151,5 +176,6 @@ class BM25Manager:
         # Atomic swap
         self._index = new_index
         self._chunk_ids = chunk_ids
+        self._chunk_meta = new_meta
         self._index_size = len(chunk_ids)
         self._last_refresh_at = time.time()

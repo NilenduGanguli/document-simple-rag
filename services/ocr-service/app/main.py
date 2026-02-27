@@ -30,10 +30,12 @@ import uuid
 
 import aio_pika
 import msgpack
+import prometheus_client
 
 from rag_shared.cache.redis_client import create_redis_client, close_redis
 from rag_shared.config import get_settings
 from rag_shared.logging import configure_structlog
+from rag_shared.tracing.otel import configure_tracer
 from rag_shared.queue.connection import get_rabbit_connection
 from rag_shared.queue.topology import (
     declare_topology,
@@ -271,6 +273,14 @@ class OCRWorker:
 
 async def main() -> None:
     configure_structlog(settings.otel_service_name or "ocr-service")
+    configure_tracer(
+        settings.otel_service_name or "ocr-service",
+        settings.jaeger_endpoint,
+    )
+
+    # Expose Prometheus metrics on port 8082
+    prometheus_client.start_http_server(8082)
+    logger.info("Prometheus metrics server started on port 8082")
 
     # Redis client with decode_responses=True so cache values are strings
     # (JSON-serialised OCR results).

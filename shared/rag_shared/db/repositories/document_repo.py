@@ -1,4 +1,5 @@
 from typing import Optional
+import json
 import asyncpg
 
 
@@ -32,7 +33,7 @@ class DocumentRepository:
                 file_size_bytes,
                 mime_type,
                 sha256_hash,
-                source_metadata or {},
+                json.dumps(source_metadata or {}),
             )
             return row['parent_document_id']
 
@@ -94,6 +95,7 @@ class DocumentRepository:
                 SELECT parent_document_id::text
                 FROM parent_documents
                 WHERE sha256_hash=$1
+                  AND error_message IS DISTINCT FROM 'deleted'
                 LIMIT 1
                 """,
                 sha256_hash,
@@ -136,3 +138,77 @@ class DocumentRepository:
                 document_id,
             )
             return result == "UPDATE 1"
+
+    async def list_all(
+        self,
+        limit: int = 50,
+        offset: int = 0,
+        status_filter: str = None,
+    ) -> tuple[list[dict], int]:
+        """List documents with pagination and optional status filter.
+        Excludes soft-deleted documents. Returns (rows, total_count)."""
+        async with self.pool.acquire() as conn:
+            count_row = await conn.fetchrow(
+                """
+                SELECT COUNT(*) AS cnt FROM parent_documents
+                WHERE ($1::text IS NULL OR status = $1)
+                  AND error_message IS DISTINCT FROM 'deleted'
+                """,
+                status_filter,
+            )
+            total = count_row['cnt']
+
+            rows = await conn.fetch(
+                """
+                SELECT pd.parent_document_id::text, pd.filename, pd.status,
+                       pd.page_count, pd.file_size_bytes, pd.created_at,
+                       pd.updated_at, pd.completed_at, pd.error_message,
+                       COUNT(c.chunk_id) AS chunk_count
+                FROM parent_documents pd
+                LEFT JOIN chunks c ON c.parent_document_id = pd.parent_document_id
+                WHERE ($1::text IS NULL OR pd.status = $1)
+                  AND pd.error_message IS DISTINCT FROM 'deleted'
+                GROUP BY pd.parent_document_id
+                ORDER BY pd.created_at DESC
+                LIMIT $2 OFFSET $3
+                """,
+                status_filter,
+                limit,
+                offset,
+            )
+            return [dict(r) for r in rows], total
+
+    async def count_by_status(self) -> dict[str, int]:
+        """Return document counts grouped by status."""
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT status, COUNT(*) AS cnt
+                FROM parent_documents
+                WHERE error_message IS DISTINCT FROM 'deleted'
+                GROUP BY status
+                """,
+            )
+            return {r['status']: r['cnt'] for r in rows}
+
+    async def get_pipeline_details(self, document_id: str) -> Optional[dict]:
+        """Get document with chunk/embedding breakdowns in a single query."""
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT pd.*,
+                       COUNT(c.chunk_id) AS total_chunks,
+                       COUNT(c.chunk_id) FILTER (WHERE c.embedding_status = 'pending') AS chunks_pending,
+                       COUNT(c.chunk_id) FILTER (WHERE c.embedding_status = 'processing') AS chunks_processing,
+                       COUNT(c.chunk_id) FILTER (WHERE c.embedding_status = 'done') AS chunks_done,
+                       COUNT(c.chunk_id) FILTER (WHERE c.embedding_status = 'failed') AS chunks_failed,
+                       COUNT(ce.embedding_id) AS total_embeddings
+                FROM parent_documents pd
+                LEFT JOIN chunks c ON c.parent_document_id = pd.parent_document_id
+                LEFT JOIN chunk_embeddings ce ON ce.parent_document_id = pd.parent_document_id
+                WHERE pd.parent_document_id = $1::uuid
+                GROUP BY pd.parent_document_id
+                """,
+                document_id,
+            )
+            return dict(row) if row else None

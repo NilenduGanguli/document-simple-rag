@@ -148,3 +148,25 @@ class ChunkRepository:
 
         logger.info(f"Fetched {len(results)} chunks for BM25 index")
         return results
+
+    async def count_by_embedding_status(self, document_id: str) -> dict[str, int]:
+        """Return chunk counts grouped by embedding_status for a document."""
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT embedding_status, COUNT(*) AS cnt
+                FROM chunks
+                WHERE parent_document_id = $1::uuid
+                GROUP BY embedding_status
+                """,
+                document_id,
+            )
+            return {r['embedding_status']: r['cnt'] for r in rows}
+
+    async def count_all_by_embedding_status(self) -> dict[str, int]:
+        """Return global chunk counts grouped by embedding_status."""
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT embedding_status, COUNT(*) AS cnt FROM chunks GROUP BY embedding_status",
+            )
+            return {r['embedding_status']: r['cnt'] for r in rows}
