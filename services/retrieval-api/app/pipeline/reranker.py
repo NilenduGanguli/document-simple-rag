@@ -124,11 +124,20 @@ class CrossEncoderReranker:
         # 3. Convert logits to relevance scores
         # ---------------------------------------------------------------------------
         # outputs[0] shape: [batch, 1] (regression) or [batch, 2] (classification)
+        # or [batch, seq_len, hidden] (raw last_hidden_state — no classification head)
         logits = outputs[0]  # np.ndarray
 
         if logits.ndim == 1:
             # Scalar per sample
             rerank_scores = _sigmoid(logits).tolist()
+        elif logits.ndim >= 3:
+            # last_hidden_state [batch, seq_len, hidden] — model has no classification head.
+            # Use L2 norm of the [CLS] token embedding as a relevance proxy,
+            # normalized to [0, 1] across the candidate set.
+            cls_emb = logits[:, 0, :]  # (batch, hidden_size)
+            norms = np.linalg.norm(cls_emb, axis=-1).astype(np.float32)  # (batch,)
+            max_norm = float(norms.max()) if norms.max() > 0 else 1.0
+            rerank_scores = (norms / max_norm).tolist()
         elif logits.shape[-1] == 1:
             # Single regression logit → sigmoid
             rerank_scores = _sigmoid(logits[:, 0]).tolist()
@@ -137,8 +146,9 @@ class CrossEncoderReranker:
             probs = _softmax(logits)
             rerank_scores = probs[:, 1].tolist()
         else:
-            # Multi-class: take max or first logit as a proxy
-            rerank_scores = _sigmoid(logits[:, 0]).tolist()
+            # Multi-class: flatten to (batch,) and sigmoid first column
+            reduced = logits.reshape(logits.shape[0], -1)[:, 0]
+            rerank_scores = _sigmoid(reduced).tolist()
 
         # ---------------------------------------------------------------------------
         # 4. Annotate and sort

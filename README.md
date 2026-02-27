@@ -35,27 +35,27 @@ make build && make up
 
 ### Services
 
-| Service | Port | Description |
-|---------|------|-------------|
-| `ingest-api` | 18000 | FastAPI: document upload, status polling, delete |
-| `ingestion-worker` | — | Async worker: PyMuPDF routing, OCR dispatch, chunking |
-| `ocr-service` | — | Tesseract RPC service for image-only PDF pages |
-| `ocr-api` | 8002 | LLM OCR via GPT-4o-mini (optional, set USE_OCR_API=true) |
-| `embedding-service` | 8080 | ONNX BERT INT8: batched embedding → PGVector |
-| `retrieval-api` | 18001 | Hybrid search: HNSW + BM25 + RRF + MMR + cross-encoder |
-| `model-init` | — | One-shot: downloads BERT, exports ONNX FP32 → INT8 |
+| Service               | Port  | Description                                              |
+| --------------------- | ----- | -------------------------------------------------------- |
+| `ingest-api`        | 18000 | FastAPI: document upload, status polling, delete         |
+| `ingestion-worker`  | —    | Async worker: PyMuPDF routing, OCR dispatch, chunking    |
+| `ocr-service`       | —    | Tesseract RPC service for image-only PDF pages           |
+| `ocr-api`           | 8002  | LLM OCR via GPT-4o-mini (optional, set USE_OCR_API=true) |
+| `embedding-service` | 8080  | ONNX BERT INT8: batched embedding → PGVector            |
+| `retrieval-api`     | 18001 | Hybrid search: HNSW + BM25 + RRF + MMR + cross-encoder   |
+| `model-init`        | —    | One-shot: downloads BERT, exports ONNX FP32 → INT8      |
 
 ### Infrastructure
 
-| Service | Port(s) | Description |
-|---------|---------|-------------|
-| `postgres` | 15432 | PostgreSQL 16 + pgvector extension |
-| `redis` | 16379 | Cache layer (embedding, dedup, query results, rate limits) |
-| `rabbitmq` | 5672 / 15672 | Message broker (ingestion, embedding, OCR queues) |
-| `minio` | 19000 / 19001 | S3-compatible object storage for raw documents |
-| `prometheus` | 9090 | Metrics collection |
-| `grafana` | 3000 | Dashboards |
-| `jaeger` | 16686 / 4317 | Distributed tracing (OTLP gRPC) |
+| Service        | Port(s)       | Description                                                |
+| -------------- | ------------- | ---------------------------------------------------------- |
+| `postgres`   | 15432         | PostgreSQL 16 + pgvector extension                         |
+| `redis`      | 16379         | Cache layer (embedding, dedup, query results, rate limits) |
+| `rabbitmq`   | 5672 / 15672  | Message broker (ingestion, embedding, OCR queues)          |
+| `minio`      | 19000 / 19001 | S3-compatible object storage for raw documents             |
+| `prometheus` | 9090          | Metrics collection                                         |
+| `grafana`    | 3000          | Dashboards                                                 |
+| `jaeger`     | 16686 / 4317  | Distributed tracing (OTLP gRPC)                            |
 
 ## Quick Start
 
@@ -103,15 +103,15 @@ Expected output:
 
 ### Web UIs
 
-| Interface | URL | Credentials |
-|-----------|-----|-------------|
-| Ingest API docs | http://localhost:18000/docs | — |
-| Retrieval API docs | http://localhost:18001/api/v1/docs | — |
-| RabbitMQ Management | http://localhost:15672 | raguser / (from .env) |
-| MinIO Console | http://localhost:19001 | minioadmin / (from .env) |
-| Prometheus | http://localhost:9090 | — |
-| Grafana | http://localhost:3000 | admin / (from .env) |
-| Jaeger | http://localhost:16686 | — |
+| Interface           | URL                                | Credentials              |
+| ------------------- | ---------------------------------- | ------------------------ |
+| Ingest API docs     | http://localhost:18000/docs        | —                       |
+| Retrieval API docs  | http://localhost:18001/api/v1/docs | —                       |
+| RabbitMQ Management | http://localhost:15672             | raguser / (from .env)    |
+| MinIO Console       | http://localhost:19001             | minioadmin / (from .env) |
+| Prometheus          | http://localhost:9090              | —                       |
+| Grafana             | http://localhost:3000              | admin / (from .env)      |
+| Jaeger              | http://localhost:16686             | —                       |
 
 ## Usage
 
@@ -169,16 +169,16 @@ curl -X DELETE http://localhost:18000/api/v1/documents/3fa85f64-5717-4562-b3fc-2
 
 All configuration is driven by environment variables in `.env`:
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `POSTGRES_PASSWORD` | `ragpassword123` | PostgreSQL password |
-| `RABBITMQ_USER` | `raguser` | RabbitMQ username |
-| `RABBITMQ_PASS` | `ragpassword123` | RabbitMQ password |
-| `MINIO_ROOT_USER` | `minioadmin` | MinIO root user |
-| `MINIO_ROOT_PASSWORD` | `minioadmin123` | MinIO root password |
-| `GRAFANA_PASSWORD` | `admin` | Grafana admin password |
-| `API_KEYS` | `dev-api-key-1,dev-api-key-2` | Comma-separated valid API keys |
-| `FORCE_MODEL_REINIT` | `false` | Force re-download of ONNX models |
+| Variable                | Default                         | Description                      |
+| ----------------------- | ------------------------------- | -------------------------------- |
+| `POSTGRES_PASSWORD`   | `ragpassword123`              | PostgreSQL password              |
+| `RABBITMQ_USER`       | `raguser`                     | RabbitMQ username                |
+| `RABBITMQ_PASS`       | `ragpassword123`              | RabbitMQ password                |
+| `MINIO_ROOT_USER`     | `minioadmin`                  | MinIO root user                  |
+| `MINIO_ROOT_PASSWORD` | `minioadmin123`               | MinIO root password              |
+| `GRAFANA_PASSWORD`    | `admin`                       | Grafana admin password           |
+| `API_KEYS`            | `dev-api-key-1,dev-api-key-2` | Comma-separated valid API keys   |
+| `FORCE_MODEL_REINIT`  | `false`                       | Force re-download of ONNX models |
 
 ## Development
 
@@ -268,17 +268,17 @@ The 11-stage retrieval pipeline:
 
 ### Prometheus Metrics
 
-| Metric | Type | Description |
-|--------|------|-------------|
-| `rag_ingest_documents_total` | Counter | Documents ingested by status |
-| `rag_queue_depth` | Gauge | Current RabbitMQ queue depths |
-| `rag_retrieval_latency_ms` | Histogram | End-to-end retrieval latency |
-| `rag_onnx_inference_duration_ms` | Histogram | ONNX session inference time |
-| `rag_onnx_pool_wait_ms` | Histogram | Time waiting for pool session |
-| `rag_embedding_batch_duration_ms` | Histogram | Embedding batch processing |
-| `rag_cache_hit_ratio` | Gauge | Embedding cache hit ratio |
-| `rag_pgvector_search_ms` | Histogram | PGVector HNSW search latency |
-| `rag_ocp_pod_cpu_throttling_ratio` | Gauge | CPU throttling ratio |
+| Metric                               | Type      | Description                   |
+| ------------------------------------ | --------- | ----------------------------- |
+| `rag_ingest_documents_total`       | Counter   | Documents ingested by status  |
+| `rag_queue_depth`                  | Gauge     | Current RabbitMQ queue depths |
+| `rag_retrieval_latency_ms`         | Histogram | End-to-end retrieval latency  |
+| `rag_onnx_inference_duration_ms`   | Histogram | ONNX session inference time   |
+| `rag_onnx_pool_wait_ms`            | Histogram | Time waiting for pool session |
+| `rag_embedding_batch_duration_ms`  | Histogram | Embedding batch processing    |
+| `rag_cache_hit_ratio`              | Gauge     | Embedding cache hit ratio     |
+| `rag_pgvector_search_ms`           | Histogram | PGVector HNSW search latency  |
+| `rag_ocp_pod_cpu_throttling_ratio` | Gauge     | CPU throttling ratio          |
 
 ### Distributed Tracing
 

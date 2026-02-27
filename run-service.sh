@@ -82,6 +82,7 @@ if $DO_START; then
 
   echo ""
   info "Stack started. Service endpoints:"
+  echo "  Frontend       → http://localhost:3001"
   echo "  Ingest API     → http://localhost:18000/docs"
   echo "  Retrieval API  → http://localhost:18001/docs"
   echo "  OCR API        → http://localhost:8002/docs"
@@ -90,6 +91,7 @@ if $DO_START; then
   echo "  Prometheus     → http://localhost:9090"
   echo "  Grafana        → http://localhost:3000"
   echo "  Jaeger UI      → http://localhost:16686"
+  echo "  Frontend UI   → http://localhost:3001"
   echo ""
   info "Follow logs with: docker compose logs -f"
   info "Stop with:        ./run-service.sh --stop"

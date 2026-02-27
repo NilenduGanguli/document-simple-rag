@@ -75,7 +75,7 @@ class IngestionRouter:
         for page_num, page in enumerate(doc):
             text_blocks = page.get_text('blocks')
             text_content = ' '.join([b[4] for b in text_blocks if b[6] == 0])
-            text_density = len(text_content.strip()) / max(page.rect.area, 1)
+            text_density = len(text_content.strip()) / max(page.rect.width * page.rect.height, 1)
             images = page.get_images(full=True)
 
             if text_density > self.TEXT_DENSITY_THRESHOLD:

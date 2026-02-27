@@ -27,6 +27,7 @@ Retry / DLQ strategy (Section 6.3)
 
 import asyncio
 import logging
+import os
 import uuid
 from typing import List
 
@@ -84,6 +85,10 @@ class IngestionWorker:
         self.chunking_engine = ChunkingEngine()
         self.doc_repo = DocumentRepository(db_pool)
         self.chunk_repo = ChunkRepository(db_pool)
+
+        # Limit concurrent OCR requests to match the OCR service concurrency (default 3)
+        ocr_concurrency = int(os.getenv('OCR_CONCURRENCY_LIMIT', '3'))
+        self._ocr_semaphore = asyncio.Semaphore(ocr_concurrency)
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -201,8 +206,11 @@ class IngestionWorker:
                 # 4. Clean text
                 clean_text = self.preprocessor.clean(routing_result.full_text)
 
-                # 5. Chunk
-                raw_chunks = self.chunking_engine.chunk(clean_text, doc_id, routing_result)
+                # 5. Chunk (run in executor so event loop stays alive for RabbitMQ heartbeats)
+                loop = asyncio.get_event_loop()
+                raw_chunks = await loop.run_in_executor(
+                    None, self.chunking_engine.chunk, clean_text, doc_id, routing_result
+                )
 
                 if not raw_chunks:
                     logger.warning(f"Doc {doc_id}: no chunks produced — marking ready")
@@ -252,6 +260,10 @@ class IngestionWorker:
         3. Consume the callback queue and resolve on matching correlation_id.
         4. Cancel consumer + delete queue in the finally block.
         """
+        async with self._ocr_semaphore:
+            return await self._dispatch_ocr_inner(img_data, doc_id, channel)
+
+    async def _dispatch_ocr_inner(self, img_data, doc_id: str, channel: aio_pika.Channel):
         correlation_id = str(uuid.uuid4())
 
         # Declare temp callback queue on this channel before publishing so

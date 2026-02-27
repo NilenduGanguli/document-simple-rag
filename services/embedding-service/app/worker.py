@@ -34,6 +34,7 @@ from rag_shared.queue.topology import (
 )
 from rag_shared.db.repositories.chunk_repo import ChunkRepository
 from rag_shared.db.repositories.embedding_repo import EmbeddingRepository
+from rag_shared.db.repositories.document_repo import DocumentRepository
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -74,6 +75,7 @@ class EmbeddingWorker:
 
         self.chunk_repo = ChunkRepository(db_pool)
         self.embedding_repo = EmbeddingRepository(db_pool)
+        self.doc_repo = DocumentRepository(db_pool)
 
     # ──────────────────────────────────────────────────────────────────────────
     # Public entry point
@@ -144,13 +146,15 @@ class EmbeddingWorker:
                     await _flush_buffer(message_buffer)
                     message_buffer = []
                 else:
-                    # Try to fill the batch up to _BATCH_COLLECT_TIMEOUT
+                    # Wait briefly to accumulate more messages; then flush partial batch
                     try:
                         await asyncio.wait_for(asyncio.sleep(_BATCH_COLLECT_TIMEOUT), timeout=_BATCH_COLLECT_TIMEOUT)
                     except asyncio.TimeoutError:
                         pass
-                    # Check if more messages arrived within the timeout window
-                    # (they would have been added to message_buffer by the outer loop)
+                    # Flush partial batch — new messages couldn't have arrived during sleep
+                    if message_buffer:
+                        await _flush_buffer(message_buffer)
+                        message_buffer = []
 
         # Drain remaining messages after shutdown signal
         if message_buffer:
@@ -198,12 +202,23 @@ class EmbeddingWorker:
             self.embedding_cache.hit_ratio
         )
 
-        # If everything is cached, ack immediately and skip embedding work
+        # If everything is cached, update DB status then ack
         if not uncached_ids:
             logger.debug(
                 f"All {len(all_chunk_ids)} chunk embeddings found in cache — "
-                "acking batch immediately"
+                "updating DB status and acking batch"
             )
+            await self.chunk_repo.bulk_update_status(all_chunk_ids, 'done')
+            # Fetch parent doc IDs to check for readiness
+            cached_chunks = await self.chunk_repo.fetch_by_ids(all_chunk_ids)
+            parent_ids = list({c['parent_document_id'] for c in cached_chunks})
+            for parent_id in parent_ids:
+                counts = await self.chunk_repo.count_by_embedding_status(parent_id)
+                total = sum(counts.values())
+                done = counts.get('done', 0)
+                if total > 0 and done == total:
+                    await self.doc_repo.update_status(parent_id, 'ready')
+                    logger.info(f"Doc {parent_id} fully embedded from cache ({done}/{total}) — marked ready")
             for msg in messages:
                 await msg.ack()
             return
@@ -365,7 +380,19 @@ class EmbeddingWorker:
         await self.chunk_repo.bulk_update_status(chunk_ids, 'done')
 
         # -----------------------------------------------------------------
-        # 7. Ack all RabbitMQ messages in the batch
+        # 7. Mark parent document(s) ready if all chunks are now embedded
+        # -----------------------------------------------------------------
+        parent_ids = list({c['parent_document_id'] for c in uncached_chunks})
+        for parent_id in parent_ids:
+            counts = await self.chunk_repo.count_by_embedding_status(parent_id)
+            total = sum(counts.values())
+            done = counts.get('done', 0)
+            if total > 0 and done == total:
+                await self.doc_repo.update_status(parent_id, 'ready')
+                logger.info(f"Doc {parent_id} fully embedded ({done}/{total} chunks) — marked ready")
+
+        # -----------------------------------------------------------------
+        # 8. Ack all RabbitMQ messages in the batch
         # -----------------------------------------------------------------
         for msg in messages:
             await msg.ack()
