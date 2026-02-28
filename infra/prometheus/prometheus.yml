@@ -37,3 +37,8 @@ scrape_configs:
     static_configs:
       - targets: ['postgres-exporter:9187']
     metrics_path: /metrics
+
+  - job_name: 'jaeger'
+    static_configs:
+      - targets: ['jaeger:14269']
+    metrics_path: /metrics

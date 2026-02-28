@@ -1,3 +1,23 @@
+// ── Auth types ──────────────────────────────────────────────────────────────
+
+export interface AuthUser {
+  username: string;
+  role: string;
+  name: string;
+}
+
+export interface LoginResponse {
+  access_token: string;
+  token_type: string;
+  user: AuthUser;
+  environment: string;
+}
+
+export interface AuthConfig {
+  environment: string;
+  auth_method: string;
+}
+
 // ── Ingestion types ──────────────────────────────────────────────────────────
 
 export interface IngestResponse {

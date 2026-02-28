@@ -28,8 +28,11 @@ async def main():
     )
 
     # Expose Prometheus metrics on port 8081
-    prometheus_client.start_http_server(8081)
-    logger.info("Prometheus metrics server started on port 8081")
+    try:
+        prometheus_client.start_http_server(8081)
+        logger.info("Prometheus metrics server started on port 8081")
+    except Exception as e:
+        logger.warning(f"Failed to start Prometheus metrics server: {e}. Metrics unavailable.")
 
     db_pool = await create_pool(settings.database_url)
     redis = await create_redis_client(settings.redis_url)

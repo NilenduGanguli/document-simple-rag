@@ -8,7 +8,7 @@
 # The API key is read from:
 #   1. First positional argument ($1)
 #   2. API_KEY environment variable
-#   3. API_KEYS line in .env file (comma-separated; first key is used)
+#   3. Defaults to dev-api-key-1 (matches docker-compose.yml default)
 #
 set -euo pipefail
 
@@ -18,17 +18,7 @@ SEC_DIR="$REPO_ROOT/sec_fillings"
 INGEST_URL="${INGEST_URL:-http://localhost:18000}/api/v1/documents/ingest"
 
 # ── Resolve API key ───────────────────────────────────────────────────────────
-API_KEY="${1:-${API_KEY:-}}"
-if [ -z "$API_KEY" ] && [ -f "$REPO_ROOT/.env" ]; then
-  API_KEY="$(grep -E '^API_KEYS=' "$REPO_ROOT/.env" 2>/dev/null | head -1 | cut -d= -f2 | tr -d '"'"'" | cut -d, -f1 || true)"
-fi
-
-if [ -z "$API_KEY" ]; then
-  echo "Error: API key required."
-  echo "Usage: $0 <API_KEY>  or  export API_KEY=..."
-  echo "       (or set API_KEYS=<key> in .env)"
-  exit 1
-fi
+API_KEY="${1:-${API_KEY:-dev-api-key-1}}"
 
 # ── Wait for ingest-api health ────────────────────────────────────────────────
 HEALTH_URL="${INGEST_URL%/api/v1/documents/ingest}/api/v1/health"

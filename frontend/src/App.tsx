@@ -1,5 +1,7 @@
 import { BrowserRouter, useLocation, Navigate } from 'react-router-dom';
+import { AuthProvider, useAuth } from './contexts/AuthContext';
 import AppShell from './components/layout/AppShell';
+import LoginPage from './pages/LoginPage';
 import DashboardPage from './pages/DashboardPage';
 import IngestPage from './pages/IngestPage';
 import RetrievePage from './pages/RetrievePage';
@@ -34,12 +36,38 @@ function Pages() {
   );
 }
 
+/**
+ * Gates the entire application behind authentication.
+ * Shows LoginPage when not authenticated, AppShell+Pages when authenticated.
+ */
+function AuthGate() {
+  const { isAuthenticated, isLoading } = useAuth();
+
+  if (isLoading) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-gray-50">
+        <div className="h-8 w-8 animate-spin rounded-full border-4 border-blue-600 border-t-transparent" />
+      </div>
+    );
+  }
+
+  if (!isAuthenticated) {
+    return <LoginPage />;
+  }
+
+  return (
+    <AppShell>
+      <Pages />
+    </AppShell>
+  );
+}
+
 export default function App() {
   return (
     <BrowserRouter>
-      <AppShell>
-        <Pages />
-      </AppShell>
+      <AuthProvider>
+        <AuthGate />
+      </AuthProvider>
     </BrowserRouter>
   );
 }

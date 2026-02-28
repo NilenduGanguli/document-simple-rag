@@ -51,3 +51,10 @@ export CORS_ORIGINS=${CORS_ORIGINS:-*}
 # ── Observability (OpenTelemetry / Jaeger) ────────────────────────────────────
 export JAEGER_ENDPOINT=${JAEGER_ENDPOINT:-http://jaeger:4317}
 export OTEL_SERVICE_NAME=${OTEL_SERVICE_NAME:-retrieval-api}
+
+# ── Environment ────────────────────────────────────────────────────────────────
+export ENVIRONMENT=${ENVIRONMENT:-DEV}
+
+# ── JWT ────────────────────────────────────────────────────────────────────────
+export JWT_SECRET=${JWT_SECRET:-dev-jwt-secret-change-in-production}
+export JWT_EXPIRY_HOURS=${JWT_EXPIRY_HOURS:-8}

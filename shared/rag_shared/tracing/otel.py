@@ -14,7 +14,13 @@ def configure_tracer(service_name: str, endpoint: str = "http://localhost:4317")
 
     try:
         exporter = OTLPSpanExporter(endpoint=endpoint, insecure=True)
-        provider.add_span_processor(BatchSpanProcessor(exporter))
+        processor = BatchSpanProcessor(
+            exporter,
+            max_queue_size=2048,
+            max_export_batch_size=512,
+            export_timeout_millis=10_000,
+        )
+        provider.add_span_processor(processor)
         logger.info(f"OpenTelemetry tracing configured for {service_name} -> {endpoint}")
     except Exception as e:
         logger.warning(f"Failed to configure OTLP exporter: {e}. Tracing disabled.")

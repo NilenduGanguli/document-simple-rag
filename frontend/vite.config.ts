@@ -9,6 +9,11 @@ export default defineConfig({
   server: {
     port: 3001,
     proxy: {
+      '/api/auth': {
+        target: 'http://localhost:18001',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api\/auth/, '/api/v1/auth'),
+      },
       '/api/ingest': {
         target: 'http://localhost:18000',
         changeOrigin: true,
