@@ -5,6 +5,7 @@ __pycache__/
 
 # C extensions
 *.so
+bert_uncased_L-10*
 
 # Distribution / packaging
 .Python
