@@ -1,14 +1,6 @@
 import { useState } from 'react';
 import type { DocumentSummary, ReprocessParams } from '../../types';
 
-const OCR_LANGUAGE_OPTIONS = [
-  { code: 'eng', label: 'English' },
-  { code: 'fra', label: 'French' },
-  { code: 'deu', label: 'German' },
-  { code: 'spa', label: 'Spanish' },
-  { code: 'chi_sim', label: 'Chinese (Simplified)' },
-];
-
 interface Props {
   document: DocumentSummary;
   onConfirm: (params: ReprocessParams) => Promise<void>;
@@ -20,21 +12,10 @@ export default function ReprocessModal({ document, onConfirm, onCancel }: Props)
   const [chunkOverlapTokens, setChunkOverlapTokens] = useState(50);
   const [chunkingStrategy, setChunkingStrategy] = useState('recursive');
   const [forceOcr, setForceOcr] = useState(false);
-  const [ocrLanguages, setOcrLanguages] = useState<string[]>(['eng']);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  function toggleOcrLanguage(code: string) {
-    setOcrLanguages((prev) =>
-      prev.includes(code) ? prev.filter((c) => c !== code) : [...prev, code],
-    );
-  }
-
   async function handleConfirm() {
-    if (ocrLanguages.length === 0) {
-      setError('Select at least one OCR language.');
-      return;
-    }
     setError(null);
     setSubmitting(true);
     try {
@@ -43,7 +24,6 @@ export default function ReprocessModal({ document, onConfirm, onCancel }: Props)
         chunk_overlap_tokens: chunkOverlapTokens,
         chunking_strategy: chunkingStrategy,
         force_ocr: forceOcr,
-        ocr_languages: ocrLanguages,
       });
     } catch (e: any) {
       setError(e.message || 'Reprocess request failed.');
@@ -126,29 +106,6 @@ export default function ReprocessModal({ document, onConfirm, onCancel }: Props)
               </span>
             </label>
           </div>
-
-          {/* OCR Languages */}
-          <div>
-            <label className="block text-xs font-medium text-gray-700 mb-2">
-              OCR Languages
-            </label>
-            <div className="flex flex-wrap gap-2">
-              {OCR_LANGUAGE_OPTIONS.map(({ code, label }) => (
-                <button
-                  key={code}
-                  type="button"
-                  onClick={() => toggleOcrLanguage(code)}
-                  className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
-                    ocrLanguages.includes(code)
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                  }`}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-          </div>
         </div>
 
         {error && (
@@ -168,7 +125,7 @@ export default function ReprocessModal({ document, onConfirm, onCancel }: Props)
             disabled={submitting}
             className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
           >
-            {submitting ? 'Reprocessing…' : 'Reprocess'}
+            {submitting ? 'Reprocessing\u2026' : 'Reprocess'}
           </button>
         </div>
       </div>

@@ -62,7 +62,3 @@ class ReprocessRequest(BaseModel):
         default=False,
         description="Force OCR even for pages that have extractable text.",
     )
-    ocr_languages: List[str] = Field(
-        default_factory=lambda: ["eng"],
-        description="Tesseract language codes for OCR (e.g. ['eng', 'fra']).",
-    )
