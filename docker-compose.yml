@@ -5,7 +5,7 @@ services:
   # ---------------------------------------------------------------------------
 
   postgres:
-    image: pgvector/pgvector:pg16
+    image: postgres:16
     restart: unless-stopped
     environment:
       POSTGRES_USER: raguser
@@ -123,6 +123,25 @@ services:
     networks:
       - rag-network
 
+  chromadb:
+    image: chromadb/chroma:latest
+    restart: unless-stopped
+    volumes:
+      - chromadb_data:/chroma/chroma
+    ports:
+      - "18200:8000"
+    environment:
+      IS_PERSISTENT: "TRUE"
+      ANONYMIZED_TELEMETRY: "FALSE"
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/8000'"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    networks:
+      - rag-network
+
   prometheus:
     image: prom/prometheus:v2.52.0
     restart: unless-stopped
@@ -161,15 +180,13 @@ services:
     restart: "no"
     environment:
       MODEL_DEST: /models
-      HF_MODEL_NAME: bert-base-multilingual-cased
-      LOCAL_MODEL_PATH: /local_model
+      HF_MODEL_NAME: google-bert/bert-base-uncased
       FORCE_REINIT: ${FORCE_MODEL_REINIT:-false}
       HF_HUB_CACHE: /models/_hf_cache
-      TRANSFORMERS_OFFLINE: "1"
-      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "0"
+      HF_HUB_OFFLINE: "0"
     volumes:
       - models_volume:/models
-      - ./bert_uncased_L-10_H-768_A-12:/local_model:ro
     networks:
       - rag-network
 
@@ -199,6 +216,7 @@ services:
       API_KEYS: ${API_KEYS:-dev-api-key-1,dev-api-key-2}
       RATE_LIMIT_PER_MINUTE: ${RATE_LIMIT_PER_MINUTE:-1000}
       RATE_LIMIT_PER_IP: ${RATE_LIMIT_PER_IP:-50}
+      CHROMADB_URL: http://chromadb:8000
       JAEGER_ENDPOINT: http://jaeger:4317
       OTEL_SERVICE_NAME: ingest-api
     ports:
@@ -310,12 +328,15 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+      chromadb:
+        condition: service_healthy
       model-init:
         condition: service_completed_successfully
     environment:
       DATABASE_URL: postgresql://raguser:${POSTGRES_PASSWORD:-ragpassword123}@postgres:5432/ragdb
       REDIS_URL: redis://redis:6379/1
       RABBITMQ_URL: amqp://${RABBITMQ_USER:-raguser}:${RABBITMQ_PASS:-ragpassword123}@rabbitmq:5672/
+      CHROMADB_URL: http://chromadb:8000
       MODEL_DEST: /models
       MODEL_VERSION: local-docker-compose
       ONNX_POOL_SIZE: "2"
@@ -349,11 +370,14 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      chromadb:
+        condition: service_healthy
       model-init:
         condition: service_completed_successfully
     environment:
       DATABASE_URL: postgresql://raguser:${POSTGRES_PASSWORD:-ragpassword123}@postgres:5432/ragdb
       REDIS_URL: redis://redis:6379/2
+      CHROMADB_URL: http://chromadb:8000
       MODEL_DEST: /models
       MODEL_VERSION: local-docker-compose
       ONNX_POOL_SIZE: "1"
@@ -414,6 +438,7 @@ volumes:
   redis_data:
   rabbitmq_data:
   minio_data:
+  chromadb_data:
   prometheus_data:
   grafana_data:
   models_volume:

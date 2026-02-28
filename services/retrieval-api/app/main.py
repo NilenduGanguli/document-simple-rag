@@ -32,6 +32,7 @@ from transformers import BertTokenizerFast
 
 from rag_shared.config import get_settings
 from rag_shared.db.pool import create_pool, close_pool
+from rag_shared.db.chroma_client import get_chroma_client, get_embedding_collection, close_chroma
 from rag_shared.cache.redis_client import create_redis_client, close_redis
 from rag_shared.onnx.session_pool import ONNXSessionPool
 from rag_shared.logging.setup import configure_structlog
@@ -120,6 +121,11 @@ async def lifespan(app: FastAPI):
     await bm25_mgr.build()
     app.state.bm25_manager = bm25_mgr
 
+    # ── 5. ChromaDB client for dense search ──────────────────────────────
+    chroma_client = await get_chroma_client(settings.chromadb_url)
+    chroma_collection = await get_embedding_collection(chroma_client)
+    app.state.chroma_collection = chroma_collection
+
     # ── 6. S3 client for presigned URLs ──────────────────────────────────
     if settings.s3_endpoint_url:
         app.state.s3_client = S3Client(
@@ -159,6 +165,7 @@ async def lifespan(app: FastAPI):
         bm25_refresh_task.cancel()
         await asyncio.gather(bm25_refresh_task, return_exceptions=True)
 
+    await close_chroma()
     await close_redis()
     await close_pool()
     logger.info("Retrieval API stopped")

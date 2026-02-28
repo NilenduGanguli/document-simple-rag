@@ -98,11 +98,11 @@
       "gridPos": { "h": 7, "w": 12, "x": 12, "y": 6 },
       "id": 11,
       "options": { "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
-      "title": "PGVector Search Latency",
+      "title": "Dense Search Latency",
       "type": "timeseries",
       "targets": [
-        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "histogram_quantile(0.50, sum(rate(rag_pgvector_search_ms_bucket[5m])) by (le))", "legendFormat": "p50", "refId": "A" },
-        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "histogram_quantile(0.95, sum(rate(rag_pgvector_search_ms_bucket[5m])) by (le))", "legendFormat": "p95", "refId": "B" }
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "histogram_quantile(0.50, sum(rate(rag_dense_search_ms_bucket[5m])) by (le))", "legendFormat": "p50", "refId": "A" },
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "histogram_quantile(0.95, sum(rate(rag_dense_search_ms_bucket[5m])) by (le))", "legendFormat": "p95", "refId": "B" }
       ]
     },
     {

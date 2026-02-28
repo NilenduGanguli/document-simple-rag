@@ -6,7 +6,7 @@ from .registry import (
     onnx_pool_wait_ms,
     embedding_batch_duration_ms,
     cache_hit_ratio,
-    pgvector_search_ms,
+    dense_search_ms,
     get_metrics_app,
 )
 
@@ -18,6 +18,6 @@ __all__ = [
     "onnx_pool_wait_ms",
     "embedding_batch_duration_ms",
     "cache_hit_ratio",
-    "pgvector_search_ms",
+    "dense_search_ms",
     "get_metrics_app",
 ]

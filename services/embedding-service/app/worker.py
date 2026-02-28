@@ -3,7 +3,7 @@ EmbeddingWorker — CPU INT8 ONNX embedding pipeline.
 
 Two coroutines connected by an asyncio Queue:
   1. _prefetch_loop: DB fetch + cache check → prefetch_queue
-  2. _embed_and_store_loop: tokenize → ONNX inference (threadpool) → PGVector upsert
+  2. _embed_and_store_loop: tokenize → ONNX inference (threadpool) → ChromaDB upsert
 
 Batch size: EMBEDDING_BATCH_SIZE (default 16, tuned for CPU RAM bandwidth)
 """
@@ -53,7 +53,7 @@ _MODEL_NAME = os.getenv('EMBEDDING_MODEL_NAME', 'bert-base-uncased-int8')
 class EmbeddingWorker:
     """
     Consumes EmbeddingTask messages from RabbitMQ, embeds chunks with INT8
-    ONNX BERT, persists embeddings to PGVector, and caches them in Redis.
+    ONNX BERT, persists embeddings to ChromaDB, and caches them in Redis.
     """
 
     def __init__(
@@ -63,6 +63,7 @@ class EmbeddingWorker:
         rabbit_connection: aio_pika.RobustConnection,
         session_pool: ONNXSessionPool,
         tokenizer_path: str,
+        chroma_collection=None,
     ) -> None:
         self.db_pool = db_pool
         self.redis = redis
@@ -77,7 +78,7 @@ class EmbeddingWorker:
         self.batch_size = _BATCH_SIZE
 
         self.chunk_repo = ChunkRepository(db_pool)
-        self.embedding_repo = EmbeddingRepository(db_pool)
+        self.embedding_repo = EmbeddingRepository(chroma_collection)
         self.doc_repo = DocumentRepository(db_pool)
 
     # ──────────────────────────────────────────────────────────────────────────
@@ -273,13 +274,13 @@ class EmbeddingWorker:
             otel_context.detach(token)
 
     # ──────────────────────────────────────────────────────────────────────────
-    # Stage 2: embed-and-store loop — tokenize → ONNX → PGVector → cache
+    # Stage 2: embed-and-store loop — tokenize → ONNX → ChromaDB → cache
     # ──────────────────────────────────────────────────────────────────────────
 
     async def _embed_and_store_loop(self, shutdown_event: asyncio.Event) -> None:
         """
         Dequeues batches from prefetch_queue, runs BERT INT8 ONNX inference,
-        mean-pools, L2-normalises, bulk-upserts to PGVector, then caches and
+        mean-pools, L2-normalises, bulk-upserts to ChromaDB, then caches and
         acks RabbitMQ messages.
         """
         loop = asyncio.get_running_loop()
@@ -382,7 +383,7 @@ class EmbeddingWorker:
         embeddings = l2_normalize_np(pooled)
 
         # -----------------------------------------------------------------
-        # 4. Bulk upsert to PGVector
+        # 4. Bulk upsert to ChromaDB
         # -----------------------------------------------------------------
         chunk_ids = [c['chunk_id'] for c in uncached_chunks]
         parent_doc_ids = [c['parent_document_id'] for c in uncached_chunks]
@@ -395,7 +396,7 @@ class EmbeddingWorker:
             model_name=_MODEL_NAME,
             model_version=settings.model_version,
         )
-        logger.debug(f"Upserted {len(chunk_ids)} embeddings to PGVector")
+        logger.debug(f"Upserted {len(chunk_ids)} embeddings to ChromaDB")
 
         # -----------------------------------------------------------------
         # 5. Cache new embeddings

@@ -31,6 +31,7 @@ from rag_shared.auth.api_key import api_key_header, validate_api_key, RateLimite
 from rag_shared.config import get_settings
 from rag_shared.db.repositories.document_repo import DocumentRepository
 from rag_shared.db.repositories.chunk_repo import ChunkRepository
+from rag_shared.db.repositories.embedding_repo import EmbeddingRepository
 from rag_shared.logging import get_logger
 from rag_shared.metrics import ingest_documents_total
 from rag_shared.queue.schemas import IngestionTask
@@ -478,8 +479,8 @@ async def delete_document(
     Soft-delete a document and hard-delete all its chunks.
 
     Sets the document status to 'failed' (with error_message='deleted') in
-    Postgres. Hard-deletes all associated chunks and their embeddings from the
-    `chunks` and `chunk_embeddings` tables. Also deletes the associated object
+    Postgres. Hard-deletes all associated chunks from the `chunks` table
+    and their embeddings from ChromaDB. Also deletes the associated object
     from S3/MinIO and evicts the SHA-256 dedup key from Redis.
     """
     doc_repo = DocumentRepository(request.app.state.db_pool)
@@ -510,6 +511,12 @@ async def delete_document(
             error=str(exc),
         )
         chunks_deleted = 0
+
+    # Delete embeddings from ChromaDB (best-effort)
+    chroma_collection = getattr(request.app.state, "chroma_collection", None)
+    if chroma_collection is not None:
+        embedding_repo = EmbeddingRepository(chroma_collection)
+        await embedding_repo.delete_by_document(document_id)
 
     # Delete from S3/MinIO (best-effort; log warning on failure, do not abort)
     s3_bucket: Optional[str] = doc.get("s3_bucket")
@@ -607,6 +614,12 @@ async def reprocess_document(
             error=str(exc),
         )
         chunks_deleted = 0
+
+    # Delete embeddings from ChromaDB (best-effort)
+    chroma_collection = getattr(request.app.state, "chroma_collection", None)
+    if chroma_collection is not None:
+        embedding_repo = EmbeddingRepository(chroma_collection)
+        await embedding_repo.delete_by_document(document_id)
 
     # 2. Reset document back to pending state
     await doc_repo.reset_for_reprocess(document_id)
