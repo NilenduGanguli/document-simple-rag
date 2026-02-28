@@ -3,10 +3,15 @@ import ChunkCard from './ChunkCard';
 
 interface Props {
   response: RetrievalResponse;
-  onViewDocument: (parentDocId: string) => void;
+  /** docId → filename lookup — used to show filename on chunks in k_chunks mode */
+  docNameMap: Record<string, string>;
+  /** Navigate to Explorer and focus this chunk */
+  onViewDocument: (docId: string, chunkId: string) => void;
+  /** Open the PDF preview for this document (n_documents mode only) */
+  onViewPDF: (docId: string) => void;
 }
 
-export default function RetrievalResults({ response, onViewDocument }: Props) {
+export default function RetrievalResults({ response, docNameMap, onViewDocument, onViewPDF }: Props) {
   if (response.mode === 'k_chunks' && response.results_k_chunks) {
     return (
       <div>
@@ -22,6 +27,7 @@ export default function RetrievalResults({ response, onViewDocument }: Props) {
               key={chunk.chunk_id || i}
               chunk={chunk}
               query={response.query}
+              filename={docNameMap[chunk.parent_document_id]}
               onViewDocument={onViewDocument}
             />
           ))}
@@ -48,7 +54,7 @@ export default function RetrievalResults({ response, onViewDocument }: Props) {
                   <span className="text-xs text-gray-400">Score: {doc.document_score.toFixed(4)}</span>
                 </div>
                 <button
-                  onClick={() => onViewDocument(doc.parent_document_id)}
+                  onClick={() => onViewPDF(doc.parent_document_id)}
                   className="rounded bg-gray-100 px-2 py-1 text-xs text-gray-600 hover:bg-gray-200"
                 >
                   View PDF
