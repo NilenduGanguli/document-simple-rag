@@ -32,10 +32,12 @@ import aio_pika
 import msgpack
 import prometheus_client
 
+from opentelemetry import context as otel_context, trace
+
 from rag_shared.cache.redis_client import create_redis_client, close_redis
 from rag_shared.config import get_settings
 from rag_shared.logging import configure_structlog
-from rag_shared.tracing.otel import configure_tracer
+from rag_shared.tracing.otel import configure_tracer, extract_trace_context
 from rag_shared.queue.connection import get_rabbit_connection
 from rag_shared.queue.topology import (
     declare_topology,
@@ -139,86 +141,100 @@ class OCRWorker:
         poison-message redelivery loops).
         """
         async with message.process(requeue=False):
-            # Initialise reply metadata to safe defaults so the finally-style
-            # reply block has something to send even if unpacking fails.
-            correlation_id: str = message.correlation_id or str(uuid.uuid4())
-            reply_to: str = message.reply_to or ""
-            page_number: int = 0
-            result_text: str = ""
-            result_confidence: float = 0.0
-            success: bool = False
-            error_msg: str = ""
+            # Extract trace context from upstream (ingestion-worker)
+            ctx = extract_trace_context(dict(message.headers) if message.headers else None)
+            token = otel_context.attach(ctx) if ctx else None
+            tracer = trace.get_tracer("ocr-service")
 
             try:
-                payload = msgpack.unpackb(message.body, raw=False)
+                # Initialise reply metadata to safe defaults so the finally-style
+                # reply block has something to send even if unpacking fails.
+                correlation_id: str = message.correlation_id or str(uuid.uuid4())
+                reply_to: str = message.reply_to or ""
+                page_number: int = 0
+                result_text: str = ""
+                result_confidence: float = 0.0
+                success: bool = False
+                error_msg: str = ""
 
-                doc_id: str = payload.get("parent_document_id", "unknown")
-                page_number = int(payload.get("page_number", 0))
-                image_bytes: bytes = payload.get("image_bytes", b"")
-                correlation_id = payload.get("reply_correlation_id", correlation_id)
+                try:
+                    payload = msgpack.unpackb(message.body, raw=False)
 
-                if not image_bytes:
-                    raise ValueError("OCR task contained empty image_bytes")
+                    doc_id: str = payload.get("parent_document_id", "unknown")
+                    page_number = int(payload.get("page_number", 0))
+                    image_bytes: bytes = payload.get("image_bytes", b"")
+                    correlation_id = payload.get("reply_correlation_id", correlation_id)
 
-                logger.debug(
-                    f"OCR task received: doc={doc_id} page={page_number} "
-                    f"size={len(image_bytes)} bytes corr={correlation_id}"
-                )
+                    if not image_bytes:
+                        raise ValueError("OCR task contained empty image_bytes")
 
-                # ---- Redis cache lookup ----------------------------------------
-                image_hash = OCRProcessor.compute_image_hash(image_bytes)
-                cache_key = f"ocr:img:{image_hash}"
+                    with tracer.start_as_current_span("ocr.process_page", attributes={
+                        "document.id": doc_id,
+                        "page.number": page_number,
+                        "image.size": len(image_bytes),
+                    }):
+                        logger.debug(
+                            f"OCR task received: doc={doc_id} page={page_number} "
+                            f"size={len(image_bytes)} bytes corr={correlation_id}"
+                        )
 
-                cached_raw = await self.redis.get(cache_key)
-                if cached_raw:
-                    cached = json.loads(cached_raw)
-                    result_text = cached.get("text", "")
-                    result_confidence = float(cached.get("confidence", 0.0))
-                    success = True
-                    logger.debug(
-                        f"OCR cache hit: page={page_number} doc={doc_id} "
-                        f"key={cache_key}"
+                        # ---- Redis cache lookup ----------------------------------------
+                        image_hash = OCRProcessor.compute_image_hash(image_bytes)
+                        cache_key = f"ocr:img:{image_hash}"
+
+                        cached_raw = await self.redis.get(cache_key)
+                        if cached_raw:
+                            cached = json.loads(cached_raw)
+                            result_text = cached.get("text", "")
+                            result_confidence = float(cached.get("confidence", 0.0))
+                            success = True
+                            logger.debug(
+                                f"OCR cache hit: page={page_number} doc={doc_id} "
+                                f"key={cache_key}"
+                            )
+                        else:
+                            # ---- Run Tesseract (blocking — offloaded to executor) ------
+                            result_text, result_confidence = await self.processor.process(image_bytes)
+                            success = True
+
+                            # Store in Redis cache (JSON, decode_responses=True compatible)
+                            cache_value = json.dumps(
+                                {"text": result_text, "confidence": result_confidence}
+                            )
+                            await self.redis.set(cache_key, cache_value, ex=OCR_CACHE_TTL)
+                            logger.debug(
+                                f"OCR cache miss: page={page_number} doc={doc_id} "
+                                f"cached with TTL={OCR_CACHE_TTL}s"
+                            )
+
+                except Exception as exc:
+                    error_msg = str(exc)
+                    logger.error(
+                        f"OCR processing failed — page={page_number} "
+                        f"corr={correlation_id}: {exc}",
+                        exc_info=True,
+                    )
+
+                # ---- Always publish a reply to unblock the awaiting caller --------
+                if reply_to:
+                    await self._publish_reply(
+                        channel=channel,
+                        reply_to=reply_to,
+                        correlation_id=correlation_id,
+                        page_number=page_number,
+                        text=result_text,
+                        confidence=result_confidence,
+                        success=success,
+                        error=error_msg if not success else None,
                     )
                 else:
-                    # ---- Run Tesseract (blocking — offloaded to executor) ------
-                    result_text, result_confidence = await self.processor.process(image_bytes)
-                    success = True
-
-                    # Store in Redis cache (JSON, decode_responses=True compatible)
-                    cache_value = json.dumps(
-                        {"text": result_text, "confidence": result_confidence}
+                    logger.warning(
+                        f"OCR message has no reply_to queue — "
+                        f"result discarded corr={correlation_id}"
                     )
-                    await self.redis.set(cache_key, cache_value, ex=OCR_CACHE_TTL)
-                    logger.debug(
-                        f"OCR cache miss: page={page_number} doc={doc_id} "
-                        f"cached with TTL={OCR_CACHE_TTL}s"
-                    )
-
-            except Exception as exc:
-                error_msg = str(exc)
-                logger.error(
-                    f"OCR processing failed — page={page_number} "
-                    f"corr={correlation_id}: {exc}",
-                    exc_info=True,
-                )
-
-            # ---- Always publish a reply to unblock the awaiting caller --------
-            if reply_to:
-                await self._publish_reply(
-                    channel=channel,
-                    reply_to=reply_to,
-                    correlation_id=correlation_id,
-                    page_number=page_number,
-                    text=result_text,
-                    confidence=result_confidence,
-                    success=success,
-                    error=error_msg if not success else None,
-                )
-            else:
-                logger.warning(
-                    f"OCR message has no reply_to queue — "
-                    f"result discarded corr={correlation_id}"
-                )
+            finally:
+                if token is not None:
+                    otel_context.detach(token)
 
     # ------------------------------------------------------------------
     # Reply publisher
@@ -277,6 +293,15 @@ async def main() -> None:
         settings.otel_service_name or "ocr-service",
         settings.jaeger_endpoint,
     )
+
+    # Auto-instrument httpx so trace context propagates to ocr-api
+    try:
+        from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
+        HTTPXClientInstrumentor().instrument()
+        logger.info("httpx auto-instrumentation enabled")
+    except ImportError:
+        logger.warning("opentelemetry-instrumentation-httpx not available — "
+                        "traces will not propagate to ocr-api")
 
     # Expose Prometheus metrics on port 8082
     try:

@@ -18,6 +18,8 @@ import msgpack
 import numpy as np
 from transformers import BertTokenizerFast
 
+from opentelemetry import context as otel_context, trace
+
 from rag_shared.config import get_settings
 from rag_shared.onnx.session_pool import ONNXSessionPool
 from rag_shared.onnx.math_utils import mean_pooling_np, l2_normalize_np
@@ -35,6 +37,7 @@ from rag_shared.queue.topology import (
 from rag_shared.db.repositories.chunk_repo import ChunkRepository
 from rag_shared.db.repositories.embedding_repo import EmbeddingRepository
 from rag_shared.db.repositories.document_repo import DocumentRepository
+from rag_shared.tracing.otel import extract_trace_context
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -170,6 +173,18 @@ class EmbeddingWorker:
         # -----------------------------------------------------------------
         # 1. Unpack all EmbeddingTask payloads
         # -----------------------------------------------------------------
+        # Extract trace context from the first message to link this batch to
+        # the upstream ingestion-worker trace for the dependency graph.
+        first_headers = dict(messages[0].headers) if messages and messages[0].headers else None
+        ctx = extract_trace_context(first_headers)
+        token = otel_context.attach(ctx) if ctx else None
+
+        # Create an explicit span so Jaeger sees the dependency link
+        tracer = trace.get_tracer("embedding-service")
+        span = tracer.start_span("embedding.process_batch")
+        span_ctx = trace.set_span_in_context(span)
+        span_token = otel_context.attach(span_ctx)
+
         all_chunk_ids: List[str] = []
         for msg in messages:
             try:
@@ -190,6 +205,10 @@ class EmbeddingWorker:
                 messages.remove(msg)
 
         if not messages or not all_chunk_ids:
+            span.end()
+            otel_context.detach(span_token)
+            if token is not None:
+                otel_context.detach(token)
             return
 
         # -----------------------------------------------------------------
@@ -221,6 +240,10 @@ class EmbeddingWorker:
                     logger.info(f"Doc {parent_id} fully embedded from cache ({done}/{total}) — marked ready")
             for msg in messages:
                 await msg.ack()
+            span.end()
+            otel_context.detach(span_token)
+            if token is not None:
+                otel_context.detach(token)
             return
 
         # -----------------------------------------------------------------
@@ -234,12 +257,20 @@ class EmbeddingWorker:
             )
             for msg in messages:
                 await msg.ack()
+            span.end()
+            otel_context.detach(span_token)
+            if token is not None:
+                otel_context.detach(token)
             return
 
         # -----------------------------------------------------------------
         # 4. Hand work to Stage 2
         # -----------------------------------------------------------------
         await self.prefetch_queue.put((messages, uncached_chunks, cached_embeddings))
+        span.end()
+        otel_context.detach(span_token)
+        if token is not None:
+            otel_context.detach(token)
 
     # ──────────────────────────────────────────────────────────────────────────
     # Stage 2: embed-and-store loop — tokenize → ONNX → PGVector → cache
