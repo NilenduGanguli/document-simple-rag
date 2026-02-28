@@ -9,7 +9,7 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: raguser
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ragpassword123}
       POSTGRES_DB: ragdb
     volumes:
       - postgres_data:/var/lib/postgresql/data
@@ -29,7 +29,7 @@ services:
     image: prometheuscommunity/postgres-exporter:v0.15.0
     restart: unless-stopped
     environment:
-      DATA_SOURCE_NAME: "postgresql://raguser:${POSTGRES_PASSWORD}@postgres:5432/ragdb?sslmode=disable"
+      DATA_SOURCE_NAME: "postgresql://raguser:${POSTGRES_PASSWORD:-ragpassword123}@postgres:5432/ragdb?sslmode=disable"
     depends_on:
       postgres:
         condition: service_healthy
@@ -58,8 +58,8 @@ services:
     image: rabbitmq:3.13-management-alpine
     restart: unless-stopped
     environment:
-      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
-      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASS}
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-raguser}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASS:-ragpassword123}
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
       - ./infra/rabbitmq/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
@@ -81,8 +81,8 @@ services:
     restart: unless-stopped
     command: server /data --console-address :9001
     environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin123}
     volumes:
       - minio_data:/data
     ports:
@@ -105,8 +105,8 @@ services:
         condition: service_healthy
     entrypoint: /bin/sh /init.sh
     environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin123}
     volumes:
       - ./infra/minio/init.sh:/init.sh:ro
     networks:
@@ -140,7 +140,7 @@ services:
     depends_on:
       - prometheus
     environment:
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
     volumes:
       - grafana_data:/var/lib/grafana
       - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
@@ -188,15 +188,17 @@ services:
       minio-init:
         condition: service_completed_successfully
     environment:
-      DATABASE_URL: postgresql://raguser:${POSTGRES_PASSWORD}@postgres:5432/ragdb
+      DATABASE_URL: postgresql://raguser:${POSTGRES_PASSWORD:-ragpassword123}@postgres:5432/ragdb
       REDIS_URL: redis://redis:6379/0
-      RABBITMQ_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASS}@rabbitmq:5672/
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-raguser}:${RABBITMQ_PASS:-ragpassword123}@rabbitmq:5672/
       S3_ENDPOINT_URL: http://minio:9000
-      S3_ACCESS_KEY: ${MINIO_ROOT_USER}
-      S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+      S3_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
+      S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin123}
       S3_BUCKET: rag-documents
       MAX_FILE_SIZE_MB: "500"
-      API_KEYS: ${API_KEYS}
+      API_KEYS: ${API_KEYS:-dev-api-key-1,dev-api-key-2}
+      RATE_LIMIT_PER_MINUTE: ${RATE_LIMIT_PER_MINUTE:-1000}
+      RATE_LIMIT_PER_IP: ${RATE_LIMIT_PER_IP:-50}
       JAEGER_ENDPOINT: http://jaeger:4317
       OTEL_SERVICE_NAME: ingest-api
     ports:
@@ -227,19 +229,25 @@ services:
       model-init:
         condition: service_completed_successfully
     environment:
-      DATABASE_URL: postgresql://raguser:${POSTGRES_PASSWORD}@postgres:5432/ragdb
+      DATABASE_URL: postgresql://raguser:${POSTGRES_PASSWORD:-ragpassword123}@postgres:5432/ragdb
       REDIS_URL: redis://redis:6379/0
-      RABBITMQ_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASS}@rabbitmq:5672/
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-raguser}:${RABBITMQ_PASS:-ragpassword123}@rabbitmq:5672/
       S3_ENDPOINT_URL: http://minio:9000
-      S3_ACCESS_KEY: ${MINIO_ROOT_USER}
-      S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+      S3_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
+      S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin123}
       S3_BUCKET: rag-documents
       MAX_FILE_SIZE_MB: "500"
       JAEGER_ENDPOINT: http://jaeger:4317
       OTEL_SERVICE_NAME: ingestion-worker
       WORKER_CONCURRENCY: "6"
+      OCR_CONCURRENCY_LIMIT: ${OCR_CONCURRENCY_LIMIT:-3}
+      CHUNKING_STRATEGY: ${CHUNKING_STRATEGY:-recursive}
+      CHUNK_MAX_TOKENS: ${CHUNK_MAX_TOKENS:-400}
+      CHUNK_OVERLAP_TOKENS: ${CHUNK_OVERLAP_TOKENS:-50}
       TOKENIZERS_PARALLELISM: "false"
       TOKENIZER_MODEL: /models/embedding/int8
+      TRANSFORMERS_OFFLINE: "1"
+      HF_HUB_OFFLINE: "1"
     volumes:
       - models_volume:/models:ro
     networks:
@@ -257,12 +265,14 @@ services:
         condition: service_healthy
     environment:
       REDIS_URL: redis://redis:6379/0
-      RABBITMQ_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASS}@rabbitmq:5672/
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-raguser}:${RABBITMQ_PASS:-ragpassword123}@rabbitmq:5672/
       TESSDATA_PREFIX: /usr/share/tesseract-ocr/5/tessdata
       OMP_THREAD_LIMIT: "2"
+      OCR_LANGUAGES: ${OCR_LANGUAGES:-eng}
+      OCR_CONCURRENCY: ${OCR_CONCURRENCY:-3}
       JAEGER_ENDPOINT: http://jaeger:4317
       OTEL_SERVICE_NAME: ocr-service
-      USE_OCR_API: ${USE_OCR_API:-false}
+      USE_OCR_API: ${USE_OCR_API:-true}
       OCR_API_URL: http://ocr-api:8002/ocr
     networks:
       - rag-network
@@ -273,7 +283,7 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     environment:
-      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
     ports:
       - "8002:8002"
     healthcheck:
@@ -300,20 +310,25 @@ services:
       model-init:
         condition: service_completed_successfully
     environment:
-      DATABASE_URL: postgresql://raguser:${POSTGRES_PASSWORD}@postgres:5432/ragdb
+      DATABASE_URL: postgresql://raguser:${POSTGRES_PASSWORD:-ragpassword123}@postgres:5432/ragdb
       REDIS_URL: redis://redis:6379/1
-      RABBITMQ_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASS}@rabbitmq:5672/
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-raguser}:${RABBITMQ_PASS:-ragpassword123}@rabbitmq:5672/
       MODEL_DEST: /models
       MODEL_VERSION: local-docker-compose
       ONNX_POOL_SIZE: "2"
       ONNX_THREADS_PER_SESSION: "2"
       EMBEDDING_BATCH_SIZE: "16"
+      EMBEDDING_MODEL_NAME: ${EMBEDDING_MODEL_NAME:-bert-base-uncased-int8}
+      BATCH_COLLECT_TIMEOUT: ${BATCH_COLLECT_TIMEOUT:-0.1}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
       OMP_NUM_THREADS: "2"
       OMP_WAIT_POLICY: PASSIVE
       MKL_NUM_THREADS: "2"
       GOMP_SPINCOUNT: "0"
       TOKENIZERS_PARALLELISM: "false"
       PREFETCH_QUEUE_SIZE: "4"
+      TRANSFORMERS_OFFLINE: "1"
+      HF_HUB_OFFLINE: "1"
       JAEGER_ENDPOINT: http://jaeger:4317
       OTEL_SERVICE_NAME: embedding-service
     volumes:
@@ -334,22 +349,31 @@ services:
       model-init:
         condition: service_completed_successfully
     environment:
-      DATABASE_URL: postgresql://raguser:${POSTGRES_PASSWORD}@postgres:5432/ragdb
+      DATABASE_URL: postgresql://raguser:${POSTGRES_PASSWORD:-ragpassword123}@postgres:5432/ragdb
       REDIS_URL: redis://redis:6379/2
       MODEL_DEST: /models
       MODEL_VERSION: local-docker-compose
       ONNX_POOL_SIZE: "1"
       ONNX_THREADS_PER_SESSION: "2"
       BM25_REFRESH_INTERVAL_SECONDS: "300"
-      API_KEYS: ${API_KEYS}
+      API_KEYS: ${API_KEYS:-dev-api-key-1,dev-api-key-2}
       JAEGER_ENDPOINT: http://jaeger:4317
       OTEL_SERVICE_NAME: retrieval-api
       TOKENIZERS_PARALLELISM: "false"
       S3_ENDPOINT_URL: http://minio:9000
-      S3_ACCESS_KEY: ${MINIO_ROOT_USER}
-      S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+      S3_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
+      S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin123}
       S3_BUCKET: rag-documents
       S3_EXTERNAL_URL: http://localhost:19000
+      MAX_QUERY_TOKENS: ${MAX_QUERY_TOKENS:-100}
+      RATE_LIMIT_PER_MINUTE: ${RATE_LIMIT_PER_MINUTE:-1000}
+      RATE_LIMIT_PER_IP: ${RATE_LIMIT_PER_IP:-500}
+      CORS_ORIGINS: ${CORS_ORIGINS:-*}
+      TRANSFORMERS_OFFLINE: "1"
+      HF_HUB_OFFLINE: "1"
+      ENVIRONMENT: ${ENVIRONMENT:-DEV}
+      JWT_SECRET: ${JWT_SECRET:-dev-jwt-secret-change-in-production}
+      JWT_EXPIRY_HOURS: ${JWT_EXPIRY_HOURS:-8}
     volumes:
       - models_volume:/models:ro
     ports:

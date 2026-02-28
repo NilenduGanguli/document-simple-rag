@@ -45,6 +45,13 @@ class Settings(BaseSettings):
     jaeger_endpoint: str = Field(default="http://localhost:4317")
     otel_service_name: str = Field(default="rag-service")
 
+    # Environment (DEV | STG | PROD)
+    environment: str = Field(default="DEV")
+
+    # JWT
+    jwt_secret: str = Field(default="dev-jwt-secret-change-in-production")
+    jwt_expiry_hours: int = Field(default=8)
+
     # Rate limiting
     rate_limit_per_minute: int = Field(default=1000)
     rate_limit_per_ip: int = Field(default=50)

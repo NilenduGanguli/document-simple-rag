@@ -45,6 +45,7 @@ from app.pipeline.query_preprocessor import build_query_preprocessor
 from app.routers.retrieve import router as retrieve_router
 from app.routers.documents import router as documents_router
 from app.routers.stats import router as stats_router
+from app.routers.auth import router as auth_router
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -217,6 +218,7 @@ app.mount("/metrics", get_metrics_app())
 app.include_router(retrieve_router, prefix="/api/v1")
 app.include_router(documents_router, prefix="/api/v1")
 app.include_router(stats_router, prefix="/api/v1")
+app.include_router(auth_router, prefix="/api/v1")
 
 # OpenTelemetry FastAPI auto-instrumentation (requires opentelemetry-instrumentation-fastapi)
 try:

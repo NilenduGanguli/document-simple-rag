@@ -51,21 +51,11 @@ command -v docker   >/dev/null 2>&1 || error "Docker is not installed or not in 
 docker compose version >/dev/null 2>&1 || error "Docker Compose v2 is required (run: docker compose version)."
 
 # ─── Environment file ────────────────────────────────────────────────────────
-if [ ! -f .env ]; then
-  if [ -f .env.example ]; then
-    warn ".env not found — copying from .env.example"
-    cp .env.example .env
-    warn "Review .env and set any required secrets (OPENAI_API_KEY if USE_OCR_API=true, etc.) before restarting."
-  else
-    error ".env file not found and no .env.example to copy from."
-  fi
-fi
-
-# Warn if USE_OCR_API=true but OPENAI_API_KEY is missing / commented out
-if grep -qE '^USE_OCR_API=true' .env 2>/dev/null; then
-  if ! grep -qE '^OPENAI_API_KEY=.+' .env 2>/dev/null; then
-    warn "USE_OCR_API=true but OPENAI_API_KEY is not set in .env — ocr-api will fail at runtime."
-  fi
+# All default values are inlined in docker-compose.yml via ${VAR:-default}.
+# A .env file is NOT required but will be loaded by Docker Compose if present,
+# allowing overrides without editing docker-compose.yml.
+if [ -f .env ]; then
+  info "Found .env — values in it will override docker-compose.yml defaults."
 fi
 
 # ─── Build ────────────────────────────────────────────────────────────────────

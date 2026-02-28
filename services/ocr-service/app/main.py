@@ -279,8 +279,11 @@ async def main() -> None:
     )
 
     # Expose Prometheus metrics on port 8082
-    prometheus_client.start_http_server(8082)
-    logger.info("Prometheus metrics server started on port 8082")
+    try:
+        prometheus_client.start_http_server(8082)
+        logger.info("Prometheus metrics server started on port 8082")
+    except Exception as e:
+        logger.warning(f"Failed to start Prometheus metrics server: {e}. Metrics unavailable.")
 
     # Redis client with decode_responses=True so cache values are strings
     # (JSON-serialised OCR results).
