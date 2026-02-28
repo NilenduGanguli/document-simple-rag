@@ -28,6 +28,11 @@ scrape_configs:
       - targets: ['ocr-service:8082']
     metrics_path: /metrics
 
+  - job_name: 'ocr-api'
+    static_configs:
+      - targets: ['ocr-api:8083']
+    metrics_path: /metrics
+
   - job_name: 'rabbitmq'
     static_configs:
       - targets: ['rabbitmq:15692']

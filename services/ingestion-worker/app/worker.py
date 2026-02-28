@@ -187,7 +187,10 @@ class IngestionWorker:
                     await self.doc_repo.update_status(doc_id, 'on_hold', error_message='Placed on hold by admin')
                     return
 
-                await self.doc_repo.update_status(doc_id, 'ingesting')
+                # update_status returns False if the doc is on_hold (DB guard)
+                if not await self.doc_repo.update_status(doc_id, 'ingesting'):
+                    logger.info(f"Doc {doc_id}: on hold (DB guard) — aborting at ingesting")
+                    return
 
                 # 1. Download PDF
                 pdf_bytes = await self.s3_client.download_file(
@@ -276,7 +279,12 @@ class IngestionWorker:
                     return
 
                 # 7. Update status and publish to embedding queue
-                await self.doc_repo.update_status(doc_id, 'chunking')
+                # If update_status returns False, the doc was put on hold between
+                # our Redis check and this DB write — abort without publishing.
+                if not await self.doc_repo.update_status(doc_id, 'chunking'):
+                    logger.info(f"Doc {doc_id}: on hold (DB guard) — aborting at chunking")
+                    return
+
                 await self._publish_embedding_batch(chunk_ids, doc_id, channel, batch_size=16)
 
                 logger.info(

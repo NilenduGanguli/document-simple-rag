@@ -12,5 +12,11 @@ export PORT="8001"
 export HOST="0.0.0.0"
 export OPENAI_API_KEY="${OPENAI_API_KEY}"
 
+#make key from .env file if exists
+if [ -f .env ]; then
+  echo "Loading environment variables from .env file..."
+  export $(grep -v '^#' .env | xargs)
+fi
+
 # Execute the main container command (CMD)
 exec "$@"
