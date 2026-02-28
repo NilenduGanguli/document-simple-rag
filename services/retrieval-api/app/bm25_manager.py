@@ -17,6 +17,7 @@ from typing import Dict, List
 from rank_bm25 import BM25Okapi
 
 from rag_shared.config import get_settings
+from rag_shared.config import REDIS_CHANNEL_BM25_REFRESH
 from rag_shared.db.repositories.chunk_repo import ChunkRepository
 
 logger = logging.getLogger(__name__)
@@ -31,8 +32,9 @@ class BM25Manager:
     never see a partially rebuilt index.
     """
 
-    def __init__(self, db_pool) -> None:
+    def __init__(self, db_pool, redis=None) -> None:
         self._db_pool = db_pool
+        self._redis = redis
         self._chunk_repo = ChunkRepository(db_pool)
 
         # These are replaced atomically on each refresh
@@ -139,6 +141,66 @@ class BM25Manager:
                 )
             except Exception as exc:
                 logger.error(f"BM25 refresh failed: {exc}", exc_info=True)
+
+    async def start_pubsub_listener(self, shutdown_event: asyncio.Event) -> None:
+        """Subscribe to Redis Pub/Sub and trigger immediate BM25 rebuild when
+        the embedding-service marks a document as ready.
+
+        This ensures all retrieval-api pods converge quickly instead of waiting
+        for the next periodic refresh.  A 0.5 s debounce prevents excessive
+        rebuilds when many documents finish embedding in rapid succession.
+        """
+        if self._redis is None:
+            logger.warning("No Redis client — BM25 pub/sub listener disabled")
+            return
+
+        pubsub = self._redis.pubsub()
+        await pubsub.subscribe(REDIS_CHANNEL_BM25_REFRESH)
+        logger.info(f"BM25 pub/sub listener subscribed to '{REDIS_CHANNEL_BM25_REFRESH}'")
+
+        try:
+            while not shutdown_event.is_set():
+                try:
+                    message = await asyncio.wait_for(
+                        pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0),
+                        timeout=5.0,
+                    )
+                except asyncio.TimeoutError:
+                    continue
+
+                if message is None:
+                    continue
+
+                if message['type'] == 'message':
+                    doc_id = message['data']
+                    if isinstance(doc_id, bytes):
+                        doc_id = doc_id.decode('utf-8')
+                    logger.info(f"BM25 refresh triggered by pub/sub (doc={doc_id})")
+
+                    # Debounce: wait briefly to batch closely-timed notifications
+                    await asyncio.sleep(0.5)
+
+                    # Drain any additional messages that arrived during debounce
+                    while True:
+                        extra = await pubsub.get_message(
+                            ignore_subscribe_messages=True, timeout=0.01
+                        )
+                        if extra is None:
+                            break
+
+                    try:
+                        t0 = time.monotonic()
+                        await self._rebuild_index()
+                        elapsed = (time.monotonic() - t0) * 1000
+                        logger.info(
+                            f"BM25 index rebuilt via pub/sub: {self._index_size} chunks "
+                            f"({elapsed:.0f}ms)"
+                        )
+                    except Exception as exc:
+                        logger.error(f"BM25 pub/sub rebuild failed: {exc}", exc_info=True)
+        finally:
+            await pubsub.unsubscribe(REDIS_CHANNEL_BM25_REFRESH)
+            await pubsub.aclose()
 
     # ──────────────────────────────────────────────────────────────────────────
     # Internal helpers

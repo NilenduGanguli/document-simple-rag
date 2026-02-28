@@ -36,6 +36,11 @@ CREATE TABLE parent_documents (
 CREATE INDEX idx_pd_status   ON parent_documents(status);
 CREATE INDEX idx_pd_created  ON parent_documents(created_at DESC);
 CREATE INDEX idx_pd_sha256   ON parent_documents(sha256_hash);
+-- Prevent duplicate non-deleted documents with the same content hash
+CREATE UNIQUE INDEX idx_pd_sha256_unique
+    ON parent_documents(sha256_hash)
+    WHERE error_message IS DISTINCT FROM 'deleted'
+      AND sha256_hash IS NOT NULL;
 
 CREATE TRIGGER update_parent_documents_updated_at
     BEFORE UPDATE ON parent_documents

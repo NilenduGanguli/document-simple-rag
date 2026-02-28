@@ -117,7 +117,7 @@ async def lifespan(app: FastAPI):
     app.state.query_preprocessor = preprocessor
 
     # ── 4. Build BM25 index ─────────────────────────────────────────────────
-    bm25_mgr = BM25Manager(db_pool)
+    bm25_mgr = BM25Manager(db_pool, redis=redis)
     await bm25_mgr.build()
     app.state.bm25_manager = bm25_mgr
 
@@ -149,6 +149,12 @@ async def lifespan(app: FastAPI):
     )
     app.state.bm25_refresh_task = bm25_refresh_task
 
+    bm25_pubsub_task = asyncio.create_task(
+        bm25_mgr.start_pubsub_listener(shutdown_event),
+        name="bm25_pubsub",
+    )
+    app.state.bm25_pubsub_task = bm25_pubsub_task
+
     _ready = True
     logger.info("Retrieval API ready")
 
@@ -159,11 +165,12 @@ async def lifespan(app: FastAPI):
     _ready = False
 
     shutdown_event.set()
-    try:
-        await asyncio.wait_for(bm25_refresh_task, timeout=10.0)
-    except (asyncio.TimeoutError, asyncio.CancelledError):
-        bm25_refresh_task.cancel()
-        await asyncio.gather(bm25_refresh_task, return_exceptions=True)
+    for task in (bm25_refresh_task, bm25_pubsub_task):
+        try:
+            await asyncio.wait_for(task, timeout=5.0)
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
 
     await close_chroma()
     await close_redis()

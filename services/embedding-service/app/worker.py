@@ -21,6 +21,7 @@ from transformers import BertTokenizerFast
 from opentelemetry import context as otel_context, trace
 
 from rag_shared.config import get_settings
+from rag_shared.config import REDIS_CHANNEL_BM25_REFRESH
 from rag_shared.onnx.session_pool import ONNXSessionPool
 from rag_shared.onnx.math_utils import mean_pooling_np, l2_normalize_np
 from rag_shared.metrics import (
@@ -116,9 +117,9 @@ class EmbeddingWorker:
         acknowledged immediately without touching the prefetch_queue.
         """
         channel = await self.rabbit_connection.channel()
-        # Allow slightly more than one batch in-flight so the embed loop
-        # is never starved waiting on DB IO.
-        await channel.set_qos(prefetch_count=self.batch_size * 2)
+        # One batch in-flight from RabbitMQ at a time;
+        # the internal prefetch_queue provides the double-buffering.
+        await channel.set_qos(prefetch_count=self.batch_size)
         await declare_topology(channel)
 
         queue = await channel.get_queue(QUEUE_EMBEDDING)
@@ -233,12 +234,13 @@ class EmbeddingWorker:
             cached_chunks = await self.chunk_repo.fetch_by_ids(all_chunk_ids)
             parent_ids = list({c['parent_document_id'] for c in cached_chunks})
             for parent_id in parent_ids:
-                counts = await self.chunk_repo.count_by_embedding_status(parent_id)
-                total = sum(counts.values())
-                done = counts.get('done', 0)
-                if total > 0 and done == total:
-                    await self.doc_repo.update_status(parent_id, 'ready')
-                    logger.info(f"Doc {parent_id} fully embedded from cache ({done}/{total}) — marked ready")
+                marked = await self.doc_repo.mark_ready_if_complete(parent_id)
+                if marked:
+                    logger.info(f"Doc {parent_id} fully embedded from cache — marked ready")
+                    try:
+                        await self.redis.publish(REDIS_CHANNEL_BM25_REFRESH, parent_id)
+                    except Exception as exc:
+                        logger.warning(f"Failed to publish BM25 refresh: {exc}")
             for msg in messages:
                 await msg.ack()
             span.end()
@@ -416,12 +418,13 @@ class EmbeddingWorker:
         # -----------------------------------------------------------------
         parent_ids = list({c['parent_document_id'] for c in uncached_chunks})
         for parent_id in parent_ids:
-            counts = await self.chunk_repo.count_by_embedding_status(parent_id)
-            total = sum(counts.values())
-            done = counts.get('done', 0)
-            if total > 0 and done == total:
-                await self.doc_repo.update_status(parent_id, 'ready')
-                logger.info(f"Doc {parent_id} fully embedded ({done}/{total} chunks) — marked ready")
+            marked = await self.doc_repo.mark_ready_if_complete(parent_id)
+            if marked:
+                logger.info(f"Doc {parent_id} fully embedded — marked ready")
+                try:
+                    await self.redis.publish(REDIS_CHANNEL_BM25_REFRESH, parent_id)
+                except Exception as exc:
+                    logger.warning(f"Failed to publish BM25 refresh: {exc}")
 
         # -----------------------------------------------------------------
         # 8. Ack all RabbitMQ messages in the batch

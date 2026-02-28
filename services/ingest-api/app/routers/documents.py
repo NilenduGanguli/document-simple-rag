@@ -251,6 +251,23 @@ async def ingest_document(
             },
         )
     except Exception as exc:
+        # Concurrent upload of same document — unique constraint on sha256_hash
+        import asyncpg
+        if isinstance(exc, asyncpg.UniqueViolationError):
+            logger.info(
+                "Duplicate document detected (concurrent insert)",
+                sha256=sha256_hash,
+                filename=safe_filename,
+            )
+            existing_id = await doc_repo.get_by_sha256(sha256_hash)
+            if existing_id:
+                await redis.set(redis_dedup_key, existing_id, ex=_SHA256_TTL_SECONDS)
+            ingest_documents_total.labels(status="duplicate").inc()
+            return IngestResponse(
+                document_id=existing_id or "unknown",
+                status="duplicate",
+                message="Document already exists (detected during concurrent upload).",
+            )
         logger.error(
             "Database insert failed",
             filename=safe_filename,
