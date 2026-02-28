@@ -6,10 +6,13 @@ interface Props {
   query: string;
   /** Parent document filename — shown in k_chunks mode where docs are not grouped */
   filename?: string;
+  /** Navigate to Explorer and focus this chunk */
   onViewDocument: (docId: string, chunkId: string) => void;
+  /** Open the PDF preview for the parent document */
+  onViewPDF?: (docId: string) => void;
 }
 
-export default function ChunkCard({ chunk, query, filename, onViewDocument }: Props) {
+export default function ChunkCard({ chunk, query, filename, onViewDocument, onViewPDF }: Props) {
   const [expanded, setExpanded] = useState(false);
 
   // Simple highlight: wrap query terms in the chunk text
@@ -88,6 +91,14 @@ export default function ChunkCard({ chunk, query, filename, onViewDocument }: Pr
             className="text-xs text-blue-600 hover:text-blue-700"
           >
             {expanded ? 'Show less' : 'Show more'}
+          </button>
+        )}
+        {onViewPDF && (
+          <button
+            onClick={() => onViewPDF(chunk.parent_document_id)}
+            className="text-xs text-gray-500 hover:text-gray-700"
+          >
+            View parent document
           </button>
         )}
         <button

@@ -7,10 +7,10 @@ interface Props {
   isLoading: boolean;
 }
 
-// BERT tokenizer max length. Rough browser estimate: 1 token ≈ 4 characters.
-const MAX_TOKENS = 512;
+// Must match MAX_QUERY_TOKENS on the backend. Rough browser estimate: 1 token ≈ 4 characters.
+const MAX_TOKENS = 100;
 const CHARS_PER_TOKEN = 4;
-const MAX_QUERY_CHARS = MAX_TOKENS * CHARS_PER_TOKEN; // 2048
+const MAX_QUERY_CHARS = MAX_TOKENS * CHARS_PER_TOKEN; // 400
 
 export default function QueryForm({ onSubmit, isLoading }: Props) {
   const [query, setQuery] = useState('');
@@ -51,7 +51,7 @@ export default function QueryForm({ onSubmit, isLoading }: Props) {
             type="text"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Enter your search query… (max ~512 tokens)"
+            placeholder="Enter your search query… (max ~100 tokens)"
             className={`w-full rounded-md border px-4 py-2 text-sm focus:outline-none focus:ring-1 ${
               overLimit
                 ? 'border-red-400 focus:border-red-500 focus:ring-red-500'

@@ -162,10 +162,14 @@ services:
     environment:
       MODEL_DEST: /models
       HF_MODEL_NAME: bert-base-multilingual-cased
+      LOCAL_MODEL_PATH: /local_model
       FORCE_REINIT: ${FORCE_MODEL_REINIT:-false}
       HF_HUB_CACHE: /models/_hf_cache
+      TRANSFORMERS_OFFLINE: "1"
+      HF_HUB_OFFLINE: "1"
     volumes:
       - models_volume:/models
+      - ./bert_uncased_L-10_H-768_A-12:/local_model:ro
     networks:
       - rag-network
 

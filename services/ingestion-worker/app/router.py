@@ -59,20 +59,31 @@ class RoutingResult:
 class IngestionRouter:
     TEXT_DENSITY_THRESHOLD = 0.05  # chars per pixel^2
 
-    async def route(self, pdf_bytes: bytes, doc_id: str) -> RoutingResult:
+    async def route(self, pdf_bytes: bytes, doc_id: str, force_ocr: bool = False) -> RoutingResult:
         """
         Inspect each PDF page and route to text extraction or OCR.
         Runs synchronous PyMuPDF in executor to not block event loop.
+
+        Parameters
+        ----------
+        force_ocr: If True, all pages are rasterized and sent to OCR regardless
+                   of their text density.
         """
         loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(None, self._route_sync, pdf_bytes, doc_id)
+        result = await loop.run_in_executor(None, self._route_sync, pdf_bytes, doc_id, force_ocr)
         return result
 
-    def _route_sync(self, pdf_bytes: bytes, doc_id: str) -> RoutingResult:
+    def _route_sync(self, pdf_bytes: bytes, doc_id: str, force_ocr: bool = False) -> RoutingResult:
         doc = fitz.open(stream=pdf_bytes, filetype='pdf')
         result = RoutingResult(document_id=doc_id, page_count=len(doc))
 
         for page_num, page in enumerate(doc):
+            if force_ocr:
+                # Force all pages through OCR by rasterizing at 300 DPI
+                pix = page.get_pixmap(dpi=300)
+                result.add_image(page_num, pix.tobytes('png'), is_full_page=True)
+                continue
+
             text_blocks = page.get_text('blocks')
             text_content = ' '.join([b[4] for b in text_blocks if b[6] == 0])
             text_density = len(text_content.strip()) / max(page.rect.width * page.rect.height, 1)
@@ -99,5 +110,6 @@ class IngestionRouter:
         logger.info(
             f"Routed doc {doc_id}: {result.page_count} pages, "
             f"{len(result.text_pages)} text, {len(result.images)} images"
+            f"{' (force_ocr=True)' if force_ocr else ''}"
         )
         return result

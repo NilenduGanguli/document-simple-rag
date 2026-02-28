@@ -12,7 +12,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY services/retrieval-api/app/ ./app/
 
+# Load environment defaults at container startup
+COPY services/retrieval-api/set-env.sh .
+RUN chmod +x set-env.sh
+
 RUN useradd -u 1001 -r appuser && chown -R appuser /app
 USER 1001
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8001"]
+CMD ["/bin/sh", "-c", ". /app/set-env.sh && exec uvicorn app.main:app --host 0.0.0.0 --port 8001"]

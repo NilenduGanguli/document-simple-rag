@@ -20,6 +20,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 import time
 import uuid
 from typing import List, Optional
@@ -113,7 +114,7 @@ async def _embed_query(query: str, app_state) -> np.ndarray:
         [query],
         padding=True,
         truncation=True,
-        max_length=512,
+        max_length=int(os.getenv("MAX_QUERY_TOKENS", "100")),
         return_tensors='np',
     )
     input_ids = encoded['input_ids'].astype(np.int64)

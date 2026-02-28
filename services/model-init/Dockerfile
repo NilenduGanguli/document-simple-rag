@@ -15,4 +15,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY services/model-init/model_init.py .
 
-CMD ["python", "model_init.py"]
+# Load environment defaults at container startup
+COPY services/model-init/set-env.sh .
+RUN chmod +x set-env.sh
+
+CMD ["/bin/sh", "-c", ". /app/set-env.sh && exec python model_init.py"]

@@ -16,10 +16,15 @@ logger = logging.getLogger(__name__)
 
 MODEL_DEST = Path(os.environ.get('MODEL_DEST', '/models'))
 HF_MODEL_NAME = os.environ.get('HF_MODEL_NAME', 'bert-base-multilingual-cased')
+LOCAL_MODEL_PATH_STR = os.environ.get('LOCAL_MODEL_PATH', '')
+LOCAL_MODEL_PATH = Path(LOCAL_MODEL_PATH_STR) if LOCAL_MODEL_PATH_STR else None
 FORCE_REINIT = os.environ.get('FORCE_REINIT', 'false').lower() == 'true'
 HF_HUB_CACHE = os.environ.get('HF_HUB_CACHE', str(MODEL_DEST / '_hf_cache'))
 os.environ['HF_HOME'] = HF_HUB_CACHE
 os.environ['TRANSFORMERS_CACHE'] = HF_HUB_CACHE
+# Set offline flags before any HuggingFace imports
+os.environ.setdefault('TRANSFORMERS_OFFLINE', os.environ.get('TRANSFORMERS_OFFLINE', '0'))
+os.environ.setdefault('HF_HUB_OFFLINE', os.environ.get('HF_HUB_OFFLINE', '0'))
 
 READY_FILE = MODEL_DEST / '.ready'
 FP32_STAGING = MODEL_DEST / '_fp32_staging'
@@ -42,20 +47,87 @@ def is_initialized() -> bool:
 
 
 def export_fp32() -> Path:
-    logger.info(f"Exporting {HF_MODEL_NAME} to ONNX FP32...")
     from optimum.onnxruntime import ORTModelForFeatureExtraction
-    from transformers import AutoTokenizer
+    from transformers import AutoTokenizer, AutoModel
 
     FP32_STAGING.mkdir(parents=True, exist_ok=True)
 
-    model = ORTModelForFeatureExtraction.from_pretrained(HF_MODEL_NAME, export=True)
-    model.save_pretrained(str(FP32_STAGING))
-    logger.info(f"FP32 model saved to {FP32_STAGING}")
+    if LOCAL_MODEL_PATH and LOCAL_MODEL_PATH.exists():
+        logger.info(f"Loading model from local path: {LOCAL_MODEL_PATH}")
 
-    tokenizer = AutoTokenizer.from_pretrained(HF_MODEL_NAME)
-    tokenizer.save_pretrained(str(FP32_STAGING))
-    logger.info("Tokenizer saved")
+        # Detect available weight format
+        has_pytorch = (
+            (LOCAL_MODEL_PATH / 'pytorch_model.bin').exists()
+            or (LOCAL_MODEL_PATH / 'model.safetensors').exists()
+        )
+        has_tf_ckpt = bool(list(LOCAL_MODEL_PATH.glob('*.ckpt.index')))
 
+        if has_pytorch:
+            # ── PyTorch weights available: load directly (no TF needed) ──
+            logger.info("Found PyTorch weights — loading directly")
+            ort_model = ORTModelForFeatureExtraction.from_pretrained(
+                str(LOCAL_MODEL_PATH), export=True,
+            )
+            ort_model.save_pretrained(str(FP32_STAGING))
+            tokenizer = AutoTokenizer.from_pretrained(str(LOCAL_MODEL_PATH))
+            tokenizer.save_pretrained(str(FP32_STAGING))
+
+        elif has_tf_ckpt:
+            # ── TF checkpoint: rename files if needed, convert via PyTorch ──
+            logger.info("Found TF checkpoint — converting via PyTorch")
+
+            # Google's BERT uses "bert_model.ckpt.*"; transformers expects "model.ckpt.*"
+            ckpt_files = list(LOCAL_MODEL_PATH.glob('*.ckpt.index'))
+            if not (LOCAL_MODEL_PATH / 'model.ckpt.index').exists():
+                ckpt_prefix = ckpt_files[0].name.rsplit('.ckpt.index', 1)[0]
+                logger.info(f"Renaming checkpoint prefix '{ckpt_prefix}' → 'model'")
+                load_staging = MODEL_DEST / '_load_staging'
+                if load_staging.exists():
+                    shutil.rmtree(load_staging)
+                load_staging.mkdir(parents=True)
+                for f in LOCAL_MODEL_PATH.iterdir():
+                    if f.is_file():
+                        target_name = f.name
+                        if target_name.startswith(ckpt_prefix + '.ckpt'):
+                            target_name = 'model.ckpt' + target_name[len(ckpt_prefix) + len('.ckpt'):]
+                        os.symlink(f.resolve(), load_staging / target_name)
+                load_path = str(load_staging)
+            else:
+                load_path = str(LOCAL_MODEL_PATH)
+
+            # TF ckpt → PyTorch (requires tensorflow)
+            pt_staging = MODEL_DEST / '_pt_staging'
+            pt_staging.mkdir(parents=True, exist_ok=True)
+            model = AutoModel.from_pretrained(load_path, from_tf=True)
+            model.save_pretrained(str(pt_staging))
+            tokenizer = AutoTokenizer.from_pretrained(load_path)
+            tokenizer.save_pretrained(str(pt_staging))
+            logger.info(f"PyTorch model staged at {pt_staging}")
+
+            # Clean up load staging
+            shutil.rmtree(MODEL_DEST / '_load_staging', ignore_errors=True)
+
+            # PyTorch → ONNX FP32
+            ort_model = ORTModelForFeatureExtraction.from_pretrained(
+                str(pt_staging), export=True,
+            )
+            ort_model.save_pretrained(str(FP32_STAGING))
+            tokenizer.save_pretrained(str(FP32_STAGING))
+            shutil.rmtree(pt_staging, ignore_errors=True)
+            logger.info("Staging cleaned up")
+        else:
+            raise RuntimeError(
+                f"No loadable weights found in {LOCAL_MODEL_PATH}. "
+                "Expected pytorch_model.bin, model.safetensors, or *.ckpt.index"
+            )
+    else:
+        logger.info(f"Downloading {HF_MODEL_NAME} from HuggingFace Hub...")
+        ort_model = ORTModelForFeatureExtraction.from_pretrained(HF_MODEL_NAME, export=True)
+        ort_model.save_pretrained(str(FP32_STAGING))
+        tokenizer = AutoTokenizer.from_pretrained(HF_MODEL_NAME)
+        tokenizer.save_pretrained(str(FP32_STAGING))
+
+    logger.info(f"FP32 ONNX + tokenizer ready at {FP32_STAGING}")
     return FP32_STAGING
 
 
@@ -100,7 +172,10 @@ def main() -> None:
         sys.exit(0)
 
     logger.info("=== Starting model initialization ===")
-    logger.info(f"Model: {HF_MODEL_NAME}")
+    if LOCAL_MODEL_PATH and LOCAL_MODEL_PATH.exists():
+        logger.info(f"Source: local TF checkpoint at {LOCAL_MODEL_PATH}")
+    else:
+        logger.info(f"Source: HuggingFace Hub — {HF_MODEL_NAME}")
     logger.info(f"Destination: {MODEL_DEST}")
 
     try:

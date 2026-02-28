@@ -212,3 +212,24 @@ class DocumentRepository:
                 document_id,
             )
             return dict(row) if row else None
+
+    async def reset_for_reprocess(self, document_id: str) -> bool:
+        """Reset document state for reprocessing.
+
+        Clears status back to 'pending', removes error_message, resets
+        retry_count and completed_at so the document flows through the
+        ingestion pipeline from scratch.  Returns True if a row was updated.
+        """
+        async with self.pool.acquire() as conn:
+            result = await conn.execute(
+                """
+                UPDATE parent_documents
+                SET status='pending',
+                    error_message=NULL,
+                    retry_count=0,
+                    completed_at=NULL
+                WHERE parent_document_id=$1::uuid
+                """,
+                document_id,
+            )
+            return result == "UPDATE 1"

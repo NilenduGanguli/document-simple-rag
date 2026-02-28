@@ -12,7 +12,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY services/embedding-service/app/ ./app/
 
+# Load environment defaults at container startup
+COPY services/embedding-service/set-env.sh .
+RUN chmod +x set-env.sh
+
 RUN useradd -u 1001 -r appuser && chown -R appuser /app
 USER 1001
 
-CMD ["python", "-m", "app.main"]
+CMD ["/bin/sh", "-c", ". /app/set-env.sh && exec python -m app.main"]

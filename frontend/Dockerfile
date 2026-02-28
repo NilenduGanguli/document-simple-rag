@@ -1,12 +1,20 @@
 # Stage 1: Build
 FROM node:20-alpine AS build
 WORKDIR /app
-ARG VITE_DEFAULT_API_KEY=dev-api-key-1
-ENV VITE_DEFAULT_API_KEY=$VITE_DEFAULT_API_KEY
+
+# Copy and source env defaults; Vite bakes VITE_* vars into the bundle at build time.
+COPY set-env.sh .
+RUN chmod +x set-env.sh
+
+# Allow overriding VITE_DEFAULT_API_KEY via docker build --build-arg or
+# by setting the variable in the host environment before sourcing set-env.sh.
+ARG VITE_DEFAULT_API_KEY
+ENV VITE_DEFAULT_API_KEY=${VITE_DEFAULT_API_KEY}
+
 COPY package.json package-lock.json* ./
 RUN npm ci --no-audit --no-fund
 COPY . .
-RUN npm run build
+RUN . ./set-env.sh && npm run build
 
 # Stage 2: Serve
 FROM nginx:1.25-alpine
