@@ -4,3 +4,4 @@ python-multipart>=0.0.9
 aio-pika>=9.4.0
 aioboto3>=13.0.0
 msgpack>=1.0.8
+chromadb>=0.6.0

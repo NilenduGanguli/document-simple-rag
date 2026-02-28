@@ -1,5 +1,4 @@
 -- Enable extensions
-CREATE EXTENSION IF NOT EXISTS vector;
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
 -- Auto-update updated_at function
@@ -68,31 +67,15 @@ CREATE TRIGGER update_chunks_updated_at
     BEFORE UPDATE ON chunks
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
--- Table 3: chunk_embeddings (PGVector)
-CREATE TABLE chunk_embeddings (
-    embedding_id       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    chunk_id           UUID NOT NULL REFERENCES chunks(chunk_id) ON DELETE CASCADE,
-    parent_document_id UUID NOT NULL,
-    embedding          vector(768),
-    model_name         TEXT NOT NULL,
-    model_version      TEXT,
-    created_at         TIMESTAMPTZ DEFAULT now()
-);
-CREATE INDEX idx_emb_chunk ON chunk_embeddings(chunk_id);
-CREATE UNIQUE INDEX uq_emb_chunk_id ON chunk_embeddings(chunk_id);
-CREATE INDEX idx_emb_hnsw ON chunk_embeddings
-    USING hnsw (embedding vector_cosine_ops) WITH (m=32, ef_construction=200);
--- Note: IVFFlat index requires data to be loaded first; create after initial data load.
--- CREATE INDEX idx_emb_ivfflat ON chunk_embeddings
---     USING ivfflat (embedding vector_cosine_ops) WITH (lists=500);
+-- Note: chunk embeddings are stored in ChromaDB, not PostgreSQL.
 
--- Table 4: retrieval_audit
+-- Table 3: retrieval_audit
 CREATE TABLE retrieval_audit (
     audit_id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     query_raw         TEXT NOT NULL,
     query_processed   TEXT,
     entities_detected JSONB DEFAULT '[]',
-    query_embedding   vector(768),
+    query_embedding   TEXT,
     retrieval_mode    TEXT CHECK (retrieval_mode IN ('k_chunks','n_documents')),
     k_requested       INT,
     n_requested       INT,

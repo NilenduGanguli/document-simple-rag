@@ -21,6 +21,7 @@ dependencies = [
     "opentelemetry-instrumentation-fastapi>=0.60b0",
     "opentelemetry-instrumentation-asyncpg>=0.60b0",
     "opentelemetry-instrumentation-httpx>=0.60b0",
+    "chromadb>=0.6.0",
     "prometheus-client>=0.20",
     "PyJWT>=2.8.0",
 ]

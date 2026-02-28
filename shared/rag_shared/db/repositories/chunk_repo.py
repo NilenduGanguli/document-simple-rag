@@ -172,21 +172,17 @@ class ChunkRepository:
             return {r['embedding_status']: r['cnt'] for r in rows}
 
     async def delete_by_document(self, document_id: str) -> int:
-        """Hard-delete all chunks (and their embeddings) for a document.
+        """Hard-delete all chunks for a document.
 
-        Deletes from chunk_embeddings first (FK constraint), then from chunks.
+        Note: Embeddings are stored in ChromaDB and must be deleted separately
+        via EmbeddingRepository.delete_by_document().
         Returns the number of chunk rows deleted.
         """
         async with self.pool.acquire() as conn:
-            async with conn.transaction():
-                await conn.execute(
-                    "DELETE FROM chunk_embeddings WHERE parent_document_id = $1::uuid",
-                    document_id,
-                )
-                result = await conn.execute(
-                    "DELETE FROM chunks WHERE parent_document_id = $1::uuid",
-                    document_id,
-                )
+            result = await conn.execute(
+                "DELETE FROM chunks WHERE parent_document_id = $1::uuid",
+                document_id,
+            )
         deleted_count = int(result.split()[-1])
         logger.info(f"Hard-deleted {deleted_count} chunks for document {document_id}")
         return deleted_count

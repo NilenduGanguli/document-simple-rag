@@ -1,15 +1,14 @@
 """
-Dense HNSW search using pgvector cosine similarity.
+Dense vector search using ChromaDB cosine similarity.
 
-Executes a vector nearest-neighbour query against chunk_embeddings using the
-pre-built HNSW index.  Sets hnsw.ef_search = 200 per connection for recall
-tuning as described in Section 12.2 of the design document.
+Queries the ChromaDB 'chunk_embeddings' collection for approximate nearest
+neighbours, then enriches results with chunk text and metadata from PostgreSQL.
 """
 from __future__ import annotations
 
 import numpy as np
 
-from rag_shared.metrics import pgvector_search_ms
+from rag_shared.metrics import dense_search_ms
 import time
 
 
@@ -18,6 +17,7 @@ async def dense_search(
     db_pool,
     k: int = 100,
     filters: dict = None,
+    chroma_collection=None,
 ) -> list[dict]:
     """
     Return the top-k most similar chunks for *query_embedding*.
@@ -28,68 +28,73 @@ async def dense_search(
         k:               Maximum number of results to return.
         filters:         Optional filter dict currently supporting
                          'document_ids': list[str].
+        chroma_collection: ChromaDB async collection for vector search.
 
     Returns:
         List of dicts with keys:
           chunk_id, parent_document_id, chunk_text, page_number,
           chunk_index, source_type, chunk_metadata, filename, cosine_score
     """
-    # Format embedding as pgvector text literal  '[0.1,0.2,...,768th]'
-    embedding_str = '[' + ','.join(str(x) for x in query_embedding.tolist()) + ']'
-
-    filter_clause = ""
-    filter_params: list = []
-    param_idx = 3  # $1 = embedding (used twice), $2 = k; filters start at $3
-
-    if filters:
-        if filters.get('document_ids'):
-            doc_ids = filters['document_ids']
-            placeholders = ', '.join(
-                f'${param_idx + i}' for i in range(len(doc_ids))
-            )
-            filter_clause += f" AND pd.parent_document_id::text IN ({placeholders})"
-            filter_params.extend(doc_ids)
-            param_idx += len(doc_ids)
-
-        if filters.get('language'):
-            filter_clause += f" AND c.language = ${param_idx}"
-            filter_params.append(filters['language'])
-            param_idx += 1
-
-        if filters.get('source_type'):
-            filter_clause += f" AND c.source_type = ${param_idx}"
-            filter_params.append(filters['source_type'])
-            param_idx += 1
+    if chroma_collection is None:
+        return []
 
     t0 = time.monotonic()
 
-    async with db_pool.acquire() as conn:
-        # ef_search controls recall/speed trade-off of the HNSW graph walk.
-        # SET LOCAL applies only to this transaction, not the whole session.
-        await conn.execute('SET LOCAL hnsw.ef_search = 200')
+    # Build ChromaDB where filter for document_ids
+    where = None
+    if filters and filters.get('document_ids'):
+        doc_ids = filters['document_ids']
+        if len(doc_ids) == 1:
+            where = {"parent_document_id": doc_ids[0]}
+        else:
+            where = {"parent_document_id": {"$in": doc_ids}}
 
-        sql = f'''
-            SELECT ce.chunk_id::text,
-                   ce.parent_document_id::text,
+    # 1. Query ChromaDB for ANN candidates (over-fetch to handle status filtering)
+    n_results = min(k * 3, 500)
+    results = await chroma_collection.query(
+        query_embeddings=[query_embedding.tolist()],
+        n_results=n_results,
+        where=where,
+    )
+
+    chunk_ids = results['ids'][0] if results['ids'] else []
+    distances = results['distances'][0] if results.get('distances') else []
+
+    if not chunk_ids:
+        elapsed_ms = (time.monotonic() - t0) * 1000
+        dense_search_ms.observe(elapsed_ms)
+        return []
+
+    # 2. Enrich with PostgreSQL (chunk text, document status filtering)
+    async with db_pool.acquire() as conn:
+        placeholders = ', '.join(f'${i+1}' for i in range(len(chunk_ids)))
+        rows = await conn.fetch(f'''
+            SELECT c.chunk_id::text,
+                   c.parent_document_id::text,
                    c.chunk_text,
                    c.page_number,
                    c.chunk_index,
                    c.source_type,
                    c.chunk_metadata,
-                   pd.filename,
-                   1 - (ce.embedding <=> $1::vector) AS cosine_score
-            FROM chunk_embeddings ce
-            JOIN chunks c ON c.chunk_id = ce.chunk_id
-            JOIN parent_documents pd
-                ON pd.parent_document_id = ce.parent_document_id
-            WHERE pd.status = 'ready' {filter_clause}
-            ORDER BY ce.embedding <=> $1::vector
-            LIMIT $2
-        '''
+                   pd.filename
+            FROM chunks c
+            JOIN parent_documents pd ON pd.parent_document_id = c.parent_document_id
+            WHERE c.chunk_id::text IN ({placeholders})
+              AND pd.status = 'ready'
+        ''', *chunk_ids)
 
-        rows = await conn.fetch(sql, embedding_str, k, *filter_params)
+    # 3. Merge scores with metadata
+    row_map = {r['chunk_id']: dict(r) for r in rows}
+    merged = []
+    for cid, dist in zip(chunk_ids, distances):
+        if cid in row_map:
+            entry = row_map[cid]
+            entry['cosine_score'] = 1.0 - dist  # ChromaDB cosine distance → similarity
+            merged.append(entry)
+        if len(merged) >= k:
+            break
 
     elapsed_ms = (time.monotonic() - t0) * 1000
-    pgvector_search_ms.observe(elapsed_ms)
+    dense_search_ms.observe(elapsed_ms)
 
-    return [dict(r) for r in rows]
+    return merged

@@ -17,6 +17,7 @@ from rag_shared.logging import configure_structlog, get_logger
 from rag_shared.tracing import configure_tracer
 from rag_shared.metrics import get_metrics_app
 from rag_shared.db.pool import create_pool, close_pool
+from rag_shared.db.chroma_client import get_chroma_client, get_embedding_collection, close_chroma
 from rag_shared.cache.redis_client import create_redis_client, close_redis
 from rag_shared.queue.connection import get_rabbit_connection, get_channel
 from rag_shared.queue.topology import declare_topology
@@ -43,10 +44,15 @@ async def lifespan(app: FastAPI):
     app.state.rabbit_channel = await get_channel(app.state.rabbit_connection)
     await declare_topology(app.state.rabbit_channel)
 
+    # ChromaDB client for embedding deletion on doc delete/reprocess
+    chroma_client = await get_chroma_client(settings.chromadb_url)
+    app.state.chroma_collection = await get_embedding_collection(chroma_client)
+
     logger.info("Ingest API started")
     yield
 
     # Cleanup
+    await close_chroma()
     await close_redis()
     await close_pool()
     if not app.state.rabbit_connection.is_closed:

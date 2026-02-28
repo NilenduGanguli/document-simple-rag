@@ -10,6 +10,7 @@ from rag_shared.auth.api_key import hash_api_key
 from rag_shared.config import get_settings
 from rag_shared.db.repositories.document_repo import DocumentRepository
 from rag_shared.db.repositories.chunk_repo import ChunkRepository
+from rag_shared.db.repositories.embedding_repo import EmbeddingRepository
 
 from app.schemas_documents import (
     BM25Stats,
@@ -59,10 +60,13 @@ async def get_stats(
     chunk_by_status = await chunk_repo.count_all_by_embedding_status()
     chunk_total = sum(chunk_by_status.values())
 
-    # Embedding count
-    async with db_pool.acquire() as conn:
-        emb_row = await conn.fetchrow("SELECT COUNT(*) AS cnt FROM chunk_embeddings")
-        total_embeddings = emb_row["cnt"]
+    # Embedding count (from ChromaDB)
+    chroma_collection = getattr(request.app.state, "chroma_collection", None)
+    if chroma_collection is not None:
+        embedding_repo = EmbeddingRepository(chroma_collection)
+        total_embeddings = await embedding_repo.count()
+    else:
+        total_embeddings = 0
 
     # Retrieval audit stats
     async with db_pool.acquire() as conn:

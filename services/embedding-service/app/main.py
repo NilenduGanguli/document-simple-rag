@@ -21,6 +21,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 
 from rag_shared.config import get_settings
 from rag_shared.db.pool import create_pool, close_pool
+from rag_shared.db.chroma_client import get_chroma_client, get_embedding_collection, close_chroma
 from rag_shared.cache.redis_client import create_redis_client, close_redis
 from rag_shared.queue.connection import get_rabbit_connection
 from rag_shared.onnx.session_pool import ONNXSessionPool
@@ -94,6 +95,10 @@ async def lifespan(app: FastAPI):
     )
     rabbit_connection = await get_rabbit_connection(settings.rabbitmq_url)
 
+    # 4b. Connect to ChromaDB
+    chroma_client = await get_chroma_client(settings.chromadb_url)
+    chroma_collection = await get_embedding_collection(chroma_client)
+
     # 5. Create and launch EmbeddingWorker
     shutdown_event = asyncio.Event()
     _state["shutdown_event"] = shutdown_event
@@ -104,6 +109,7 @@ async def lifespan(app: FastAPI):
         rabbit_connection=rabbit_connection,
         session_pool=session_pool,
         tokenizer_path=TOKENIZER_PATH,
+        chroma_collection=chroma_collection,
     )
 
     worker_task = asyncio.create_task(
@@ -134,6 +140,7 @@ async def lifespan(app: FastAPI):
 
     # Close infrastructure connections
     await rabbit_connection.close()
+    await close_chroma()
     await close_redis()
     await close_pool()
     logger.info("Embedding service stopped")
@@ -145,7 +152,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="RAG Embedding Service",
-    description="Consumes chunk embedding tasks from RabbitMQ and persists to PGVector",
+    description="Consumes chunk embedding tasks from RabbitMQ and persists to ChromaDB",
     version="1.0.0",
     lifespan=lifespan,
     docs_url=None,

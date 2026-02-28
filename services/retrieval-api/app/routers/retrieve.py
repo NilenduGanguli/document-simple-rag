@@ -5,7 +5,7 @@ Full hybrid pipeline:
   1.  Redis result cache check
   2.  NER query preprocessing (normalise + entity extraction)
   3.  Bi-encoder query embedding (ONNX INT8)
-  4.  Dense HNSW search (pgvector)
+  4.  Dense vector search (ChromaDB)
   5.  Sparse BM25 search (in-memory BM25Okapi)
   6.  Reciprocal Rank Fusion (RRF)
   7.  MMR re-ranking (diversity)
@@ -215,8 +215,8 @@ async def _log_audit(
     api_key_hash: str,
 ) -> None:
     """Insert a retrieval audit record into the retrieval_audit table."""
-    # Represent embedding as a pgvector text literal for storage
-    embedding_str = '[' + ','.join(str(x) for x in query_embedding.tolist()) + ']'
+    # Store embedding as JSON text
+    embedding_str = json.dumps(query_embedding.tolist())
 
     try:
         async with db_pool.acquire() as conn:
@@ -231,7 +231,7 @@ async def _log_audit(
                     latency_ms, client_ip, api_key_hash
                 ) VALUES (
                     $1::uuid, $2, $3, $4::jsonb,
-                    $5::vector,
+                    $5,
                     $6, $7, $8,
                     $9::jsonb, $10::jsonb,
                     $11::jsonb, $12::jsonb, $13::jsonb,
@@ -310,7 +310,7 @@ async def retrieve(
     query_embedding = await _embed_query(processed_query, app_state)
     latency['embedding_ms'] = (time.monotonic() - t0) * 1000
 
-    # ── 4. Dense HNSW search ──────────────────────────────────────────────────
+    # ── 4. Dense vector search (ChromaDB) ───────────────────────────────────
     t0 = time.monotonic()
     filters_dict = (
         request_body.filters.model_dump(exclude_none=True)
@@ -322,6 +322,7 @@ async def retrieve(
         db_pool=db_pool,
         k=config.dense_candidates,
         filters=filters_dict,
+        chroma_collection=getattr(app_state, 'chroma_collection', None),
     )
     latency['dense_search_ms'] = (time.monotonic() - t0) * 1000
     logger.debug(f"Dense search: {len(dense_results)} results")

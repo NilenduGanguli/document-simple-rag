@@ -221,10 +221,9 @@ class DocumentRepository:
                        COUNT(c.chunk_id) FILTER (WHERE c.embedding_status = 'processing') AS chunks_processing,
                        COUNT(c.chunk_id) FILTER (WHERE c.embedding_status = 'done') AS chunks_done,
                        COUNT(c.chunk_id) FILTER (WHERE c.embedding_status = 'failed') AS chunks_failed,
-                       COUNT(ce.embedding_id) AS total_embeddings
+                       COUNT(c.chunk_id) FILTER (WHERE c.embedding_status = 'done') AS total_embeddings
                 FROM parent_documents pd
                 LEFT JOIN chunks c ON c.parent_document_id = pd.parent_document_id
-                LEFT JOIN chunk_embeddings ce ON ce.parent_document_id = pd.parent_document_id
                 WHERE pd.parent_document_id = $1::uuid
                 GROUP BY pd.parent_document_id
                 """,
