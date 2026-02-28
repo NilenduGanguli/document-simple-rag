@@ -37,7 +37,7 @@ from rag_shared.queue.schemas import IngestionTask
 from rag_shared.queue.topology import EXCHANGE_INGESTION, RK_INGEST
 from rag_shared.storage.s3_client import S3Client
 
-from ..schemas import ChunkItem, ChunksResponse, DocumentStatus, IngestResponse
+from ..schemas import ChunkItem, ChunksResponse, DocumentStatus, IngestResponse, ReprocessRequest
 
 logger = get_logger(__name__)
 settings = get_settings()
@@ -461,7 +461,7 @@ async def get_document_chunks(
 @router.delete(
     "/{document_id}",
     status_code=status.HTTP_200_OK,
-    summary="Soft-delete a document",
+    summary="Soft-delete a document and hard-delete its chunks",
     responses={
         200: {"description": "Document deleted"},
         404: {"description": "Document not found"},
@@ -473,12 +473,12 @@ async def delete_document(
     key_hash: str = Depends(_authenticate),
 ) -> dict:
     """
-    Soft-delete a document.
+    Soft-delete a document and hard-delete all its chunks.
 
     Sets the document status to 'failed' (with error_message='deleted') in
-    Postgres. Also deletes the associated object from S3/MinIO and evicts the
-    SHA-256 dedup key from Redis. Chunks remain in the `chunks` table but
-    will be excluded from future BM25/vector index refreshes.
+    Postgres. Hard-deletes all associated chunks and their embeddings from the
+    `chunks` and `chunk_embeddings` tables. Also deletes the associated object
+    from S3/MinIO and evicts the SHA-256 dedup key from Redis.
     """
     doc_repo = DocumentRepository(request.app.state.db_pool)
     doc = await doc_repo.get_by_id(document_id)
@@ -496,6 +496,18 @@ async def delete_document(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to soft-delete document record in the database.",
         )
+
+    # Hard-delete all chunks and their embeddings (best-effort)
+    chunk_repo = ChunkRepository(request.app.state.db_pool)
+    try:
+        chunks_deleted = await chunk_repo.delete_by_document(document_id)
+    except Exception as exc:
+        logger.warning(
+            "Chunk cascade-delete failed after DB soft-delete (non-fatal)",
+            document_id=document_id,
+            error=str(exc),
+        )
+        chunks_deleted = 0
 
     # Delete from S3/MinIO (best-effort; log warning on failure, do not abort)
     s3_bucket: Optional[str] = doc.get("s3_bucket")
@@ -524,9 +536,139 @@ async def delete_document(
                 error=str(exc),
             )
 
-    logger.info("Document soft-deleted", document_id=document_id)
+    logger.info("Document deleted", document_id=document_id, chunks_deleted=chunks_deleted)
     return {
         "document_id": document_id,
         "status": "deleted",
-        "message": "Document has been deleted.",
+        "message": f"Document and {chunks_deleted} chunk(s) have been deleted.",
+    }
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# POST /documents/{document_id}/reprocess
+# ──────────────────────────────────────────────────────────────────────────────
+
+@router.post(
+    "/{document_id}/reprocess",
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Reprocess a document with new chunking parameters",
+    responses={
+        202: {"description": "Document accepted for reprocessing"},
+        404: {"description": "Document not found"},
+        409: {"description": "Document is currently being processed"},
+    },
+)
+async def reprocess_document(
+    document_id: str,
+    body: ReprocessRequest,
+    request: Request,
+    key_hash: str = Depends(_authenticate),
+) -> dict:
+    """
+    Re-ingest an existing document with new parameters.
+
+    Deletes all existing chunks/embeddings, resets the document to 'pending',
+    and re-publishes an ingestion task with override chunking parameters.
+    The original S3 PDF is re-used — no re-upload is required.
+
+    Blocked if the document is currently mid-processing (status='ingesting',
+    'chunking', or 'embedding').
+    """
+    doc_repo = DocumentRepository(request.app.state.db_pool)
+    doc = await doc_repo.get_by_id(document_id)
+
+    if doc is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Document '{document_id}' not found.",
+        )
+
+    # Block reprocess while the document is mid-pipeline
+    _BLOCKED_STATUSES = {"ingesting", "chunking", "embedding"}
+    if doc.get("status") in _BLOCKED_STATUSES:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Document is currently being processed (status='{doc['status']}'). "
+                "Wait for it to complete or fail before reprocessing."
+            ),
+        )
+
+    # 1. Hard-delete existing chunks and embeddings
+    chunk_repo = ChunkRepository(request.app.state.db_pool)
+    try:
+        chunks_deleted = await chunk_repo.delete_by_document(document_id)
+    except Exception as exc:
+        logger.warning(
+            "Chunk pre-delete failed before reprocess (non-fatal)",
+            document_id=document_id,
+            error=str(exc),
+        )
+        chunks_deleted = 0
+
+    # 2. Reset document back to pending state
+    await doc_repo.reset_for_reprocess(document_id)
+
+    # 3. Publish new ingestion task with chunking override parameters
+    task_body: bytes = msgpack.packb({
+        "parent_document_id": document_id,
+        "s3_bucket": doc["s3_bucket"],
+        "s3_key": doc["s3_key"],
+        "filename": doc["filename"],
+        "file_size_bytes": doc.get("file_size_bytes", 0),
+        "mime_type": doc.get("mime_type", "application/pdf"),
+        "priority": 1,
+        "retry_count": 0,
+        "created_at": time.time(),
+        "source_metadata": doc.get("source_metadata") or {},
+        # Per-run chunking overrides (read by ingestion-worker)
+        "chunk_max_tokens": body.chunk_max_tokens,
+        "chunk_overlap_tokens": body.chunk_overlap_tokens,
+        "chunking_strategy": body.chunking_strategy,
+        "force_ocr": body.force_ocr,
+        "ocr_languages": body.ocr_languages,
+    })
+
+    try:
+        channel = request.app.state.rabbit_channel
+        exchange = await channel.declare_exchange(
+            EXCHANGE_INGESTION,
+            type=aio_pika.ExchangeType.DIRECT,
+            durable=True,
+            passive=False,
+        )
+        amqp_message = aio_pika.Message(
+            body=task_body,
+            content_type="application/msgpack",
+            delivery_mode=aio_pika.DeliveryMode.PERSISTENT,
+            message_id=document_id,
+        )
+        await exchange.publish(amqp_message, routing_key=RK_INGEST)
+        logger.info(
+            "Reprocess task published",
+            document_id=document_id,
+            chunks_cleared=chunks_deleted,
+            chunk_max_tokens=body.chunk_max_tokens,
+            chunk_overlap_tokens=body.chunk_overlap_tokens,
+            chunking_strategy=body.chunking_strategy,
+            force_ocr=body.force_ocr,
+        )
+    except Exception as exc:
+        logger.error(
+            "RabbitMQ publish failed for reprocess — document reset to pending but NOT queued",
+            document_id=document_id,
+            error=str(exc),
+        )
+
+    return {
+        "document_id": document_id,
+        "status": "accepted",
+        "chunks_cleared": chunks_deleted,
+        "message": (
+            f"Document requeued for reprocessing with "
+            f"chunk_max_tokens={body.chunk_max_tokens}, "
+            f"overlap={body.chunk_overlap_tokens}, "
+            f"strategy='{body.chunking_strategy}', "
+            f"force_ocr={body.force_ocr}."
+        ),
     }

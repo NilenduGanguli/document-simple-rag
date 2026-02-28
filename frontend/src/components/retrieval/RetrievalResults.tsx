@@ -29,6 +29,7 @@ export default function RetrievalResults({ response, docNameMap, onViewDocument,
               query={response.query}
               filename={docNameMap[chunk.parent_document_id]}
               onViewDocument={onViewDocument}
+              onViewPDF={onViewPDF}
             />
           ))}
         </div>
@@ -67,6 +68,7 @@ export default function RetrievalResults({ response, docNameMap, onViewDocument,
                 chunk={doc.primary_chunk}
                 query={response.query}
                 onViewDocument={onViewDocument}
+                onViewPDF={onViewPDF}
               />
               {doc.supporting_chunks.length > 0 && (
                 <div className="mt-3">
@@ -80,6 +82,7 @@ export default function RetrievalResults({ response, docNameMap, onViewDocument,
                         chunk={chunk}
                         query={response.query}
                         onViewDocument={onViewDocument}
+                        onViewPDF={onViewPDF}
                       />
                     ))}
                   </div>

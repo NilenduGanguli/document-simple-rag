@@ -169,3 +169,20 @@ export interface SystemStats {
   retrieval: RetrievalStats;
   bm25: BM25Stats;
 }
+
+// ── Admin / Reprocess types ───────────────────────────────────────────────────
+
+export interface ReprocessParams {
+  chunk_max_tokens: number;
+  chunk_overlap_tokens: number;
+  chunking_strategy: string;
+  force_ocr: boolean;
+  ocr_languages: string[];
+}
+
+export interface ReprocessResponse {
+  document_id: string;
+  status: string;
+  chunks_cleared: number;
+  message: string;
+}

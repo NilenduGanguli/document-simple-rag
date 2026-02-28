@@ -88,7 +88,7 @@ class RetrievalRequest(BaseModel):
 
     query: str = Field(
         min_length=1,
-        max_length=2000,
+        max_length=500,
         description="Natural-language question or search query.",
     )
     mode: Literal['k_chunks', 'n_documents'] = Field(

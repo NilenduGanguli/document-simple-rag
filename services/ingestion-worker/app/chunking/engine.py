@@ -1,5 +1,5 @@
 import os
-from typing import List
+from typing import List, Optional
 from .strategies.base import Chunk
 from .strategies.recursive import RecursiveCharacterSplitter
 import logging
@@ -19,16 +19,42 @@ class ChunkingEngine:
         }
         self._default_strategy = os.getenv('CHUNKING_STRATEGY', 'recursive')
 
-    def chunk(self, text: str, document_id: str, routing_result=None) -> List[dict]:
+    def chunk(
+        self,
+        text: str,
+        document_id: str,
+        routing_result=None,
+        strategy_name: Optional[str] = None,
+        max_tokens: Optional[int] = None,
+        overlap_tokens: Optional[int] = None,
+    ) -> List[dict]:
         """
         Split text into chunks using the configured strategy.
+
+        Parameters
+        ----------
+        text:          Cleaned document text.
+        document_id:   Used for logging.
+        routing_result: Routing metadata (unused by the splitter directly).
+        strategy_name: Override strategy for this call (falls back to env default).
+        max_tokens:    Per-call max tokens override (falls back to env default).
+        overlap_tokens: Per-call overlap override (falls back to env default).
+
         Returns list of dicts ready for DB insertion.
         """
-        strategy = self._strategies.get(self._default_strategy)
+        effective_strategy = strategy_name or self._default_strategy
+        strategy = self._strategies.get(effective_strategy)
         if not strategy:
-            raise ValueError(f"Unknown chunking strategy: {self._default_strategy}")
+            logger.warning(
+                f"Unknown chunking strategy '{effective_strategy}', falling back to 'recursive'"
+            )
+            strategy = self._strategies['recursive']
 
-        raw_chunks = strategy.split(text)
+        raw_chunks = strategy.split(
+            text,
+            max_tokens=max_tokens,
+            overlap_tokens=overlap_tokens,
+        )
 
         # Convert to DB-ready dicts
         result = []
@@ -46,3 +72,4 @@ class ChunkingEngine:
 
         logger.info(f"Document {document_id}: {len(result)} chunks produced")
         return result
+

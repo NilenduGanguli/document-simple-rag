@@ -164,6 +164,14 @@ class IngestionWorker:
         async with message.process(requeue=False):
             payload = msgpack.unpackb(message.body, raw=False)
             doc_id = payload['parent_document_id']
+
+            # Extract per-message chunking overrides (set by reprocess endpoint;
+            # absent in normal ingestion messages so defaults apply)
+            force_ocr: bool = bool(payload.get('force_ocr', False))
+            chunk_max_tokens = payload.get('chunk_max_tokens')    # None → env default
+            chunk_overlap_tokens = payload.get('chunk_overlap_tokens')  # None → env default
+            chunking_strategy = payload.get('chunking_strategy')   # None → env default
+
             try:
                 await self.doc_repo.update_status(doc_id, 'ingesting')
 
@@ -173,7 +181,9 @@ class IngestionWorker:
                 )
 
                 # 2. Route pages — text extraction or image/OCR
-                routing_result = await self.ingestion_router.route(pdf_bytes, doc_id)
+                routing_result = await self.ingestion_router.route(
+                    pdf_bytes, doc_id, force_ocr=force_ocr
+                )
 
                 # Persist routing metadata to the document record
                 await self.doc_repo.update_metadata(
@@ -209,7 +219,15 @@ class IngestionWorker:
                 # 5. Chunk (run in executor so event loop stays alive for RabbitMQ heartbeats)
                 loop = asyncio.get_event_loop()
                 raw_chunks = await loop.run_in_executor(
-                    None, self.chunking_engine.chunk, clean_text, doc_id, routing_result
+                    None,
+                    lambda: self.chunking_engine.chunk(
+                        clean_text,
+                        doc_id,
+                        routing_result,
+                        strategy_name=chunking_strategy,
+                        max_tokens=chunk_max_tokens,
+                        overlap_tokens=chunk_overlap_tokens,
+                    ),
                 )
 
                 if not raw_chunks:

@@ -15,7 +15,7 @@ for read operations.
 
 Environment variables
 ---------------------
-CHUNK_MAX_TOKENS      Maximum tokens per chunk           (default: 512)
+CHUNK_MAX_TOKENS      Maximum tokens per chunk           (default: 400)
 CHUNK_OVERLAP_TOKENS  Overlap tokens between chunks      (default: 50)
 TOKENIZER_MODEL       HuggingFace tokenizer model name   (default: bert-base-multilingual-cased)
 """
@@ -23,7 +23,7 @@ TOKENIZER_MODEL       HuggingFace tokenizer model name   (default: bert-base-mul
 import os
 import logging
 from collections import deque
-from typing import List, Tuple, Dict
+from typing import List, Optional, Tuple, Dict
 
 from transformers import BertTokenizerFast
 
@@ -46,7 +46,7 @@ class RecursiveCharacterSplitter(BaseChunkStrategy):
     DEFAULT_SEPARATORS: List[str] = ["\n\n", "\n", ". ", " ", ""]
 
     def __init__(self) -> None:
-        self.max_tokens: int = int(os.getenv("CHUNK_MAX_TOKENS", "512"))
+        self.max_tokens: int = int(os.getenv("CHUNK_MAX_TOKENS", "400"))
         self.overlap_tokens: int = int(os.getenv("CHUNK_OVERLAP_TOKENS", "50"))
 
         model_name = os.getenv("TOKENIZER_MODEL", "bert-base-multilingual-cased")
@@ -73,27 +73,42 @@ class RecursiveCharacterSplitter(BaseChunkStrategy):
     # Public interface (BaseChunkStrategy)
     # ------------------------------------------------------------------
 
-    def split(self, text: str, **kwargs) -> List[Chunk]:
+    def split(
+        self,
+        text: str,
+        max_tokens: Optional[int] = None,
+        overlap_tokens: Optional[int] = None,
+        **kwargs,
+    ) -> List[Chunk]:
         """
         Split `text` into a list of Chunk objects.
 
         Parameters
         ----------
-        text: Full document text (already cleaned by TextPreprocessor).
+        text:           Full document text (already cleaned by TextPreprocessor).
+        max_tokens:     Per-call override for maximum tokens per chunk.
+                        Falls back to CHUNK_MAX_TOKENS env var if not provided.
+        overlap_tokens: Per-call override for overlap tokens.
+                        Falls back to CHUNK_OVERLAP_TOKENS env var if not provided.
 
         Returns
         -------
         Ordered list of Chunk dataclasses with char_start / char_end pointing
         into the original `text` string.
         """
+        eff_max = max_tokens if max_tokens is not None else self.max_tokens
+        eff_overlap = overlap_tokens if overlap_tokens is not None else self.overlap_tokens
+
         if not text or not text.strip():
             return []
 
         # Clear cache at the start of each document to release memory.
         self._token_cache.clear()
 
-        segments = self._recursive_split(text, self.DEFAULT_SEPARATORS, text_offset=0)
-        result = self._merge_into_chunks(segments)
+        segments = self._recursive_split(
+            text, self.DEFAULT_SEPARATORS, text_offset=0, max_tokens=eff_max
+        )
+        result = self._merge_into_chunks(segments, max_tokens=eff_max, overlap_tokens=eff_overlap)
 
         # Release cache memory after processing.
         self._token_cache.clear()
@@ -109,27 +124,25 @@ class RecursiveCharacterSplitter(BaseChunkStrategy):
     # = >1536 chars), keeping false-positive skips minimal.
     _CHARS_PER_TOKEN_LOWER_BOUND = 3
 
-    def _fits_in_max_tokens(self, text: str) -> bool:
+    def _fits_in_max_tokens(self, text: str, max_tokens: int) -> bool:
         """
         Return True if `text` fits within max_tokens.
 
         Uses a cheap character-count pre-check to avoid calling the tokenizer
         on very long texts (which can cause memory spikes in the Rust backend
-        for inputs far exceeding 512 tokens).  Only falls through to the actual
+        for inputs far exceeding max_tokens).  Only falls through to the actual
         tokenizer when the text is short enough to plausibly fit.
         """
-        # If the character count is so high that even the most generous
-        # chars-per-token estimate puts us over max_tokens, skip tokenization.
-        if len(text) > self.max_tokens * self._CHARS_PER_TOKEN_LOWER_BOUND:
+        if len(text) > max_tokens * self._CHARS_PER_TOKEN_LOWER_BOUND:
             return False
 
         cached = self._token_cache.get(text)
         if cached is not None:
-            return cached <= self.max_tokens
+            return cached <= max_tokens
 
         count = len(self._tokenizer.encode(text, add_special_tokens=False))
         self._token_cache[text] = count
-        return count <= self.max_tokens
+        return count <= max_tokens
 
     def _count_tokens(self, text: str) -> int:
         """
@@ -150,7 +163,7 @@ class RecursiveCharacterSplitter(BaseChunkStrategy):
     # ------------------------------------------------------------------
 
     def _recursive_split(
-        self, text: str, separators: List[str], text_offset: int
+        self, text: str, separators: List[str], text_offset: int, max_tokens: int
     ) -> List[_Segment]:
         """
         Recursively decompose `text` into segments that each fit within
@@ -162,6 +175,7 @@ class RecursiveCharacterSplitter(BaseChunkStrategy):
         text:        Slice of text to split.
         separators:  Remaining separators to try (most coarse first).
         text_offset: Byte offset of text[0] in the original document string.
+        max_tokens:  Effective token ceiling for this split call.
 
         Returns
         -------
@@ -171,12 +185,12 @@ class RecursiveCharacterSplitter(BaseChunkStrategy):
             return []
 
         # The text already fits — return it as a single segment.
-        if self._fits_in_max_tokens(text):
+        if self._fits_in_max_tokens(text, max_tokens):
             return [(text, text_offset, text_offset + len(text))]
 
         # No separators left — fall back to binary character halving.
         if not separators:
-            return self._split_by_char_halving(text, text_offset)
+            return self._split_by_char_halving(text, text_offset, max_tokens)
 
         separator = separators[0]
         remaining = separators[1:]
@@ -184,7 +198,7 @@ class RecursiveCharacterSplitter(BaseChunkStrategy):
         # Empty-string separator is the final fallback when all word/line
         # separators have been exhausted.
         if separator == "":
-            return self._split_by_char_halving(text, text_offset)
+            return self._split_by_char_halving(text, text_offset, max_tokens)
 
         raw_parts = text.split(separator)
         result: List[_Segment] = []
@@ -193,11 +207,11 @@ class RecursiveCharacterSplitter(BaseChunkStrategy):
         for part in raw_parts:
             if part:
                 part_end = current_offset + len(part)
-                if self._fits_in_max_tokens(part):
+                if self._fits_in_max_tokens(part, max_tokens):
                     result.append((part, current_offset, part_end))
                 else:
                     # Recurse with a finer-grained separator.
-                    sub_segments = self._recursive_split(part, remaining, current_offset)
+                    sub_segments = self._recursive_split(part, remaining, current_offset, max_tokens)
                     result.extend(sub_segments)
 
             # Advance past the part content AND the separator character(s).
@@ -205,7 +219,9 @@ class RecursiveCharacterSplitter(BaseChunkStrategy):
 
         return result
 
-    def _split_by_char_halving(self, text: str, text_offset: int) -> List[_Segment]:
+    def _split_by_char_halving(
+        self, text: str, text_offset: int, max_tokens: int
+    ) -> List[_Segment]:
         """
         Last-resort split: recursively halve `text` at the midpoint until
         each half fits within max_tokens.  Guarantees termination because
@@ -214,7 +230,7 @@ class RecursiveCharacterSplitter(BaseChunkStrategy):
         if not text:
             return []
 
-        if self._fits_in_max_tokens(text):
+        if self._fits_in_max_tokens(text, max_tokens):
             return [(text, text_offset, text_offset + len(text))]
 
         mid = len(text) // 2
@@ -222,16 +238,18 @@ class RecursiveCharacterSplitter(BaseChunkStrategy):
         right = text[mid:]
 
         return self._split_by_char_halving(
-            left, text_offset
+            left, text_offset, max_tokens
         ) + self._split_by_char_halving(
-            right, text_offset + mid
+            right, text_offset + mid, max_tokens
         )
 
     # ------------------------------------------------------------------
     # Merging segments into overlapping chunks
     # ------------------------------------------------------------------
 
-    def _merge_into_chunks(self, segments: List[_Segment]) -> List[Chunk]:
+    def _merge_into_chunks(
+        self, segments: List[_Segment], max_tokens: int, overlap_tokens: int
+    ) -> List[Chunk]:
         """
         Merge short segments into Chunks of at most max_tokens with a
         sliding-window overlap strategy.
@@ -273,7 +291,7 @@ class RecursiveCharacterSplitter(BaseChunkStrategy):
             seg_text, seg_start, seg_end = segments[i]
             seg_tokens = self._count_tokens(seg_text)
 
-            if window and (window_tokens + seg_tokens > self.max_tokens):
+            if window and (window_tokens + seg_tokens > max_tokens):
                 # ---- Emit current window ----------------------------------------
                 chunk_text = " ".join(s[0] for s in window)
                 char_start = window[0][1]
@@ -296,7 +314,7 @@ class RecursiveCharacterSplitter(BaseChunkStrategy):
 
                 # ---- Trim front of window to at most overlap_tokens -----------
                 # Use stored token count from window entry — no extra _count_tokens call.
-                while window and window_tokens > self.overlap_tokens:
+                while window and window_tokens > overlap_tokens:
                     removed = window.popleft()
                     window_tokens -= removed[3]
                     # Guard against token count going negative due to estimation
@@ -335,6 +353,7 @@ class RecursiveCharacterSplitter(BaseChunkStrategy):
         logger.info(
             f"RecursiveCharacterSplitter: {len(segments)} segments -> "
             f"{len(chunks)} chunks "
-            f"(max_tokens={self.max_tokens}, overlap={self.overlap_tokens})"
+            f"(max_tokens={max_tokens}, overlap={overlap_tokens})"
         )
         return chunks
+
