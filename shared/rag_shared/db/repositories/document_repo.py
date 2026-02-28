@@ -42,21 +42,15 @@ class DocumentRepository:
         document_id: str,
         status: str,
         error_message: str = None,
-    ) -> None:
+    ) -> bool:
+        """Update document status. Returns False if the document is on_hold
+        and a non-hold status was requested (prevents the worker from
+        overwriting a hold placed by the admin).
+        """
         async with self.pool.acquire() as conn:
-            if status == 'ready':
-                await conn.execute(
-                    """
-                    UPDATE parent_documents
-                    SET status=$1, error_message=$2, completed_at=now()
-                    WHERE parent_document_id=$3::uuid
-                    """,
-                    status,
-                    error_message,
-                    document_id,
-                )
-            else:
-                await conn.execute(
+            # When setting on_hold, always allow (admin action)
+            if status == 'on_hold':
+                result = await conn.execute(
                     """
                     UPDATE parent_documents
                     SET status=$1, error_message=$2
@@ -66,6 +60,31 @@ class DocumentRepository:
                     error_message,
                     document_id,
                 )
+            elif status == 'ready':
+                result = await conn.execute(
+                    """
+                    UPDATE parent_documents
+                    SET status=$1, error_message=$2, completed_at=now()
+                    WHERE parent_document_id=$3::uuid
+                      AND status != 'on_hold'
+                    """,
+                    status,
+                    error_message,
+                    document_id,
+                )
+            else:
+                result = await conn.execute(
+                    """
+                    UPDATE parent_documents
+                    SET status=$1, error_message=$2
+                    WHERE parent_document_id=$3::uuid
+                      AND status != 'on_hold'
+                    """,
+                    status,
+                    error_message,
+                    document_id,
+                )
+            return result == "UPDATE 1"
 
     async def increment_retry(self, document_id: str) -> int:
         async with self.pool.acquire() as conn:

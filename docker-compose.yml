@@ -284,10 +284,13 @@ services:
     restart: unless-stopped
     environment:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      JAEGER_ENDPOINT: http://jaeger:4317
+      OTEL_SERVICE_NAME: ocr-api
+      METRICS_PORT: "8083"
     ports:
       - "8002:8002"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8002/docs"]
+      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
       interval: 15s
       timeout: 10s
       retries: 5
