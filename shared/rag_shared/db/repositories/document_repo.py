@@ -86,6 +86,63 @@ class DocumentRepository:
                 )
             return result == "UPDATE 1"
 
+    async def mark_ready_if_complete(self, document_id: str) -> bool:
+        """Atomically check if all chunks are embedded and mark the document
+        as 'ready' if so.
+
+        Uses ``SELECT … FOR UPDATE`` to prevent concurrent pods from both
+        marking the same document ready.  Returns ``True`` only when THIS
+        call performed the transition to 'ready'.
+        """
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                # Lock the document row to serialise concurrent readiness checks
+                doc = await conn.fetchrow(
+                    """
+                    SELECT status
+                    FROM parent_documents
+                    WHERE parent_document_id = $1::uuid
+                    FOR UPDATE
+                    """,
+                    document_id,
+                )
+                if doc is None:
+                    return False
+
+                # Already terminal — nothing to do
+                if doc['status'] in ('ready', 'on_hold', 'failed'):
+                    return False
+
+                # Count chunk embedding statuses within the same transaction
+                counts = await conn.fetch(
+                    """
+                    SELECT embedding_status, COUNT(*) AS cnt
+                    FROM chunks
+                    WHERE parent_document_id = $1::uuid
+                    GROUP BY embedding_status
+                    """,
+                    document_id,
+                )
+                status_map = {r['embedding_status']: r['cnt'] for r in counts}
+                total = sum(status_map.values())
+                done = status_map.get('done', 0)
+
+                if total == 0 or done < total:
+                    return False
+
+                # All chunks are done — mark ready
+                result = await conn.execute(
+                    """
+                    UPDATE parent_documents
+                    SET status = 'ready', completed_at = now()
+                    WHERE parent_document_id = $1::uuid
+                      AND status != 'on_hold'
+                      AND status != 'ready'
+                    """,
+                    document_id,
+                )
+                return result == "UPDATE 1"
+
     async def increment_retry(self, document_id: str) -> int:
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow(

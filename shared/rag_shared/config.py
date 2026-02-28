@@ -75,3 +75,7 @@ def get_settings() -> Settings:
     if _settings is None:
         _settings = Settings()
     return _settings
+
+
+# Redis Pub/Sub channel for cross-service notifications
+REDIS_CHANNEL_BM25_REFRESH = "rag:bm25:refresh"
