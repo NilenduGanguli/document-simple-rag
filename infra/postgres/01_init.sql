@@ -25,7 +25,7 @@ CREATE TABLE parent_documents (
     has_images           BOOLEAN DEFAULT FALSE,
     language_detected    TEXT,
     status               TEXT DEFAULT 'pending'
-                         CHECK (status IN ('pending','ingesting','chunking','embedding','ready','failed')),
+                         CHECK (status IN ('pending','ingesting','chunking','embedding','ready','failed','on_hold')),
     error_message        TEXT,
     retry_count          INT DEFAULT 0,
     source_metadata      JSONB DEFAULT '{}',

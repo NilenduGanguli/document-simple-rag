@@ -13,4 +13,16 @@ export const ingestApi = {
 
   reprocessDocument: (id: string, params: ReprocessParams) =>
     apiClient.request<ReprocessResponse>('POST', `/api/ingest/documents/${id}/reprocess`, params),
+
+  holdDocument: (id: string) =>
+    apiClient.request<{ document_id: string; status: string; previous_status: string; message: string }>(
+      'POST',
+      `/api/ingest/documents/${id}/hold`,
+    ),
+
+  resumeDocument: (id: string) =>
+    apiClient.request<{ document_id: string; status: string; message: string }>(
+      'POST',
+      `/api/ingest/documents/${id}/resume`,
+    ),
 };
