@@ -1,12 +1,12 @@
 """
-OCR Service — RabbitMQ consumer that processes image pages with Tesseract.
+OCR Service — RabbitMQ consumer that dispatches OCR to the external ocr-api.
 
 Workflow per message
 --------------------
 1. Consume OCRTask from ocr_queue (msgpack-encoded).
 2. Check Redis cache:  key  ocr:img:{sha256_of_image}  TTL 30 days.
    - Cache hit  → return cached (text, confidence) immediately.
-   - Cache miss → run Tesseract in a thread-pool executor, store result.
+   - Cache miss → forward image to ocr-api via httpx, store result.
 3. Publish OCRResult to the reply_to queue specified by the caller with the
    matching correlation_id so the ingestion-worker RPC future resolves.
 4. Handle all failures gracefully: always publish an OCRResult even on error
@@ -16,9 +16,7 @@ Workflow per message
 Concurrency
 -----------
 OCR_CONCURRENCY (env, default 3) consumer coroutines are started, each with
-its own aio_pika channel and prefetch_count=1.  Tesseract itself is CPU-bound
-so more coroutines than CPU cores will not help unless I/O (download, Redis)
-dominates.  Keep OCR_CONCURRENCY <= number of CPU cores allocated to the pod.
+its own aio_pika channel and prefetch_count=1.
 """
 
 import asyncio
@@ -50,7 +48,6 @@ settings = get_settings()
 logger = logging.getLogger(__name__)
 
 OCR_CONCURRENCY: int = int(os.getenv("OCR_CONCURRENCY", "3"))
-OCR_LANGUAGES: str = os.getenv("OCR_LANGUAGES", "eng")
 # 30 days in seconds
 OCR_CACHE_TTL: int = 30 * 24 * 60 * 60
 
@@ -71,7 +68,7 @@ class OCRWorker:
         self.redis = redis
         self.rabbit_connection = rabbit_connection
         self.concurrency = concurrency
-        self.processor = OCRProcessor(languages=OCR_LANGUAGES)
+        self.processor = OCRProcessor()
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -193,7 +190,7 @@ class OCRWorker:
                                 f"key={cache_key}"
                             )
                         else:
-                            # ---- Run Tesseract (blocking — offloaded to executor) ------
+                            # ---- Run OCR (via ocr-api) ------
                             result_text, result_confidence = await self.processor.process(image_bytes)
                             success = True
 
@@ -333,10 +330,7 @@ async def main() -> None:
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, lambda: shutdown_event.set())
 
-    logger.info(
-        f"OCR service starting — concurrency={OCR_CONCURRENCY} "
-        f"languages={OCR_LANGUAGES}"
-    )
+    logger.info(f"OCR service starting — concurrency={OCR_CONCURRENCY}")
 
     try:
         await worker.run(shutdown_event)

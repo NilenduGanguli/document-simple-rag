@@ -197,7 +197,6 @@ export interface ReprocessParams {
   chunk_overlap_tokens: number;
   chunking_strategy: string;
   force_ocr: boolean;
-  ocr_languages: string[];
 }
 
 export interface ReprocessResponse {

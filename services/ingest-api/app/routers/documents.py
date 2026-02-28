@@ -658,7 +658,6 @@ async def reprocess_document(
         "chunk_overlap_tokens": body.chunk_overlap_tokens,
         "chunking_strategy": body.chunking_strategy,
         "force_ocr": body.force_ocr,
-        "ocr_languages": body.ocr_languages,
     })
 
     try:

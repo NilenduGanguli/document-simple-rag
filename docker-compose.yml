@@ -281,17 +281,15 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+      ocr-api:
+        condition: service_healthy
     environment:
       REDIS_URL: redis://redis:6379/0
       RABBITMQ_URL: amqp://${RABBITMQ_USER:-raguser}:${RABBITMQ_PASS:-ragpassword123}@rabbitmq:5672/
-      TESSDATA_PREFIX: /usr/share/tesseract-ocr/5/tessdata
-      OMP_THREAD_LIMIT: "2"
-      OCR_LANGUAGES: ${OCR_LANGUAGES:-eng}
       OCR_CONCURRENCY: ${OCR_CONCURRENCY:-3}
+      OCR_API_URL: http://ocr-api:8002/ocr
       JAEGER_ENDPOINT: http://jaeger:4317
       OTEL_SERVICE_NAME: ocr-service
-      USE_OCR_API: ${USE_OCR_API:-true}
-      OCR_API_URL: http://ocr-api:8002/ocr
     networks:
       - rag-network
 
