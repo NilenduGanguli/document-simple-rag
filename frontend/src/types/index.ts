@@ -96,6 +96,8 @@ export interface RetrievalConfig {
   mmr_lambda?: number;
   enable_reranking?: boolean;
   enable_ner?: boolean;
+  k_rrf_dense?: number;
+  k_rrf_sparse?: number;
 }
 
 export interface RetrievalRequest {

@@ -59,8 +59,27 @@ class RetrievalConfig(BaseModel):
         description="Enable cross-encoder reranking stage.",
     )
     enable_ner: bool = Field(
-        default=True,
-        description="Enable NER-based query preprocessing.",
+        default=False,
+        description="Enable NER-based query preprocessing (disabled by default).",
+    )
+    k_rrf_dense: int = Field(
+        default=60,
+        ge=1,
+        le=1000,
+        description=(
+            "RRF smoothing parameter for the dense (semantic) ranking list. "
+            "Lower values increase the influence of top-ranked dense results."
+        ),
+    )
+    k_rrf_sparse: int = Field(
+        default=60,
+        ge=1,
+        le=1000,
+        description=(
+            "RRF smoothing parameter for the sparse (BM25) ranking list. "
+            "Lower values increase the influence of top-ranked BM25 results. "
+            "Set lower than k_rrf_dense to up-weight keyword matches."
+        ),
     )
 
 

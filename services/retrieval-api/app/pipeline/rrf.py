@@ -1,12 +1,13 @@
 """
 Reciprocal Rank Fusion (RRF) — merges dense and sparse result lists.
 
-RRF score formula: score(d) = Σ  1 / (k_rrf + rank_i(d))
+RRF score formula: score(d) = Σ  1 / (k_i + rank_i(d))
 
-where the sum is over all ranking lists that contain document d.
+where k_i is the smoothing parameter for each ranking list and the sum is
+over all lists that contain document d.
 
-This implementation merges two lists (dense + sparse) but is trivially
-generalisable to N lists by extending the loop.
+This implementation merges two lists (dense + sparse) with independent k
+parameters so each source's influence can be tuned separately.
 """
 from __future__ import annotations
 
@@ -14,7 +15,8 @@ from __future__ import annotations
 def reciprocal_rank_fusion(
     dense_results: list[dict],
     sparse_results: list[dict],
-    k_rrf: int = 60,
+    k_rrf_dense: int = 60,
+    k_rrf_sparse: int = 60,
 ) -> list[dict]:
     """
     Fuse dense (cosine) and sparse (BM25) result lists.
@@ -24,8 +26,13 @@ def reciprocal_rank_fusion(
                         Each dict must have a 'chunk_id' key.
         sparse_results: Ordered list of dicts from sparse_search().
                         Each dict must have 'chunk_id' and 'bm25_score' keys.
-        k_rrf:          RRF smoothing hyper-parameter (default 60, per original
-                        Cormack et al. 2009 paper recommendation).
+        k_rrf_dense:    RRF smoothing parameter for the dense ranking list.
+                        Lower values increase influence of top-ranked dense
+                        results. Default 60 (Cormack et al. 2009).
+        k_rrf_sparse:   RRF smoothing parameter for the sparse (BM25) ranking
+                        list. Tune independently of k_rrf_dense to adjust
+                        the relative weight of keyword vs semantic matches.
+                        E.g. lower k_rrf_sparse boosts BM25 influence.
 
     Returns:
         Merged list sorted by rrf_score (descending).  Each entry contains
@@ -39,7 +46,7 @@ def reciprocal_rank_fusion(
     # --- Dense ranking contribution ---
     for rank, result in enumerate(dense_results, start=1):
         cid = result['chunk_id']
-        rrf_scores[cid] = rrf_scores.get(cid, 0.0) + 1.0 / (k_rrf + rank)
+        rrf_scores[cid] = rrf_scores.get(cid, 0.0) + 1.0 / (k_rrf_dense + rank)
         # Initialise from dense result; bm25_score defaults to 0
         if cid not in result_map:
             result_map[cid] = dict(result)
@@ -48,7 +55,7 @@ def reciprocal_rank_fusion(
     # --- Sparse ranking contribution ---
     for rank, result in enumerate(sparse_results, start=1):
         cid = result['chunk_id']
-        rrf_scores[cid] = rrf_scores.get(cid, 0.0) + 1.0 / (k_rrf + rank)
+        rrf_scores[cid] = rrf_scores.get(cid, 0.0) + 1.0 / (k_rrf_sparse + rank)
         if cid not in result_map:
             # Appeared only in sparse; dense fields will be missing but
             # the caller should handle that (e.g. fetch from DB if needed).

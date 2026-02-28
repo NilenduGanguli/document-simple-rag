@@ -4,10 +4,12 @@ import type { ChunkResult } from '../../types';
 interface Props {
   chunk: ChunkResult;
   query: string;
-  onViewDocument: (parentDocId: string) => void;
+  /** Parent document filename — shown in k_chunks mode where docs are not grouped */
+  filename?: string;
+  onViewDocument: (docId: string, chunkId: string) => void;
 }
 
-export default function ChunkCard({ chunk, query, onViewDocument }: Props) {
+export default function ChunkCard({ chunk, query, filename, onViewDocument }: Props) {
   const [expanded, setExpanded] = useState(false);
 
   // Simple highlight: wrap query terms in the chunk text
@@ -30,6 +32,16 @@ export default function ChunkCard({ chunk, query, onViewDocument }: Props) {
 
   return (
     <div className="rounded-lg border border-gray-200 bg-white p-4 transition-shadow hover:shadow-md">
+      {/* Parent document name (k_chunks mode) */}
+      {filename && (
+        <div className="mb-2 flex items-center gap-1.5 truncate text-xs">
+          <svg className="h-3.5 w-3.5 flex-shrink-0 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+          </svg>
+          <span className="truncate font-medium text-gray-600" title={filename}>{filename}</span>
+        </div>
+      )}
+
       {/* Header with scores */}
       <div className="mb-2 flex flex-wrap items-center gap-2 text-xs">
         <span className="rounded bg-gray-100 px-1.5 py-0.5 font-mono text-gray-600">
@@ -79,10 +91,10 @@ export default function ChunkCard({ chunk, query, onViewDocument }: Props) {
           </button>
         )}
         <button
-          onClick={() => onViewDocument(chunk.parent_document_id)}
+          onClick={() => onViewDocument(chunk.parent_document_id, chunk.chunk_id)}
           className="text-xs text-gray-500 hover:text-gray-700"
         >
-          View parent document
+          View in Explorer ↗
         </button>
         <span className="ml-auto text-[10px] font-mono text-gray-300" title="Chunk ID">
           {chunk.chunk_id.slice(0, 8)}...

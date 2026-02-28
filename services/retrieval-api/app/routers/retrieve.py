@@ -337,7 +337,12 @@ async def retrieve(
 
     # ── 6. RRF fusion ─────────────────────────────────────────────────────────
     t0 = time.monotonic()
-    rrf_results = reciprocal_rank_fusion(dense_results, sparse_results)
+    rrf_results = reciprocal_rank_fusion(
+        dense_results,
+        sparse_results,
+        k_rrf_dense=config.k_rrf_dense,
+        k_rrf_sparse=config.k_rrf_sparse,
+    )
     latency['rrf_ms'] = (time.monotonic() - t0) * 1000
 
     # ── 7. MMR re-ranking ─────────────────────────────────────────────────────

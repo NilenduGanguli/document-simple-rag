@@ -7,6 +7,11 @@ interface Props {
   isLoading: boolean;
 }
 
+// BERT tokenizer max length. Rough browser estimate: 1 token ≈ 4 characters.
+const MAX_TOKENS = 512;
+const CHARS_PER_TOKEN = 4;
+const MAX_QUERY_CHARS = MAX_TOKENS * CHARS_PER_TOKEN; // 2048
+
 export default function QueryForm({ onSubmit, isLoading }: Props) {
   const [query, setQuery] = useState('');
   const [mode, setMode] = useState<'k_chunks' | 'n_documents'>('k_chunks');
@@ -18,12 +23,17 @@ export default function QueryForm({ onSubmit, isLoading }: Props) {
     sparse_candidates: 100,
     mmr_lambda: 0.7,
     enable_reranking: true,
-    enable_ner: true,
+    enable_ner: false,
+    k_rrf_dense: 60,
+    k_rrf_sparse: 60,
   });
+
+  const estTokens = Math.ceil(query.length / CHARS_PER_TOKEN);
+  const overLimit = query.length > MAX_QUERY_CHARS;
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!query.trim()) return;
+    if (!query.trim() || overLimit) return;
     onSubmit({
       query: query.trim(),
       mode,
@@ -36,17 +46,32 @@ export default function QueryForm({ onSubmit, isLoading }: Props) {
   return (
     <form onSubmit={handleSubmit} className="rounded-lg border border-gray-200 bg-white p-6">
       <div className="flex gap-3">
-        <input
-          type="text"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Enter your search query..."
-          className="flex-1 rounded-md border border-gray-300 px-4 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-        />
+        <div className="flex-1">
+          <input
+            type="text"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Enter your search query… (max ~512 tokens)"
+            className={`w-full rounded-md border px-4 py-2 text-sm focus:outline-none focus:ring-1 ${
+              overLimit
+                ? 'border-red-400 focus:border-red-500 focus:ring-red-500'
+                : 'border-gray-300 focus:border-blue-500 focus:ring-blue-500'
+            }`}
+          />
+          <div className="mt-1 flex items-center justify-between">
+            <span className={`text-xs ${overLimit ? 'text-red-600 font-medium' : 'text-gray-400'}`}>
+              ~{estTokens} / {MAX_TOKENS} tokens
+              {overLimit && ' — query too long, please shorten it'}
+            </span>
+            <span className="text-xs text-gray-400">
+              {query.length} / {MAX_QUERY_CHARS} chars
+            </span>
+          </div>
+        </div>
         <button
           type="submit"
-          disabled={isLoading || !query.trim()}
-          className="flex items-center gap-2 rounded-md bg-blue-600 px-5 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+          disabled={isLoading || !query.trim() || overLimit}
+          className="flex items-center gap-2 self-start rounded-md bg-blue-600 px-5 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
         >
           {isLoading && <LoadingSpinner size="sm" />}
           Search
@@ -137,25 +162,55 @@ export default function QueryForm({ onSubmit, isLoading }: Props) {
               className="w-full rounded border border-gray-300 px-2 py-1 text-xs"
             />
           </div>
-          <div className="flex items-center gap-2">
+          <div>
+            <label className="mb-1 block text-xs font-medium text-gray-600">
+              RRF k — dense
+              <span className="ml-1 font-normal text-gray-400">(↓ = more semantic weight)</span>
+            </label>
             <input
-              type="checkbox"
-              checked={config.enable_reranking}
-              onChange={(e) => setConfig({ ...config, enable_reranking: e.target.checked })}
-              className="rounded border-gray-300"
-              id="reranking"
+              type="number"
+              value={config.k_rrf_dense}
+              onChange={(e) => setConfig({ ...config, k_rrf_dense: Number(e.target.value) })}
+              min={1}
+              max={1000}
+              className="w-full rounded border border-gray-300 px-2 py-1 text-xs"
             />
-            <label htmlFor="reranking" className="text-xs text-gray-600">Reranking</label>
           </div>
-          <div className="flex items-center gap-2">
+          <div>
+            <label className="mb-1 block text-xs font-medium text-gray-600">
+              RRF k — sparse
+              <span className="ml-1 font-normal text-gray-400">(↓ = more keyword weight)</span>
+            </label>
             <input
-              type="checkbox"
-              checked={config.enable_ner}
-              onChange={(e) => setConfig({ ...config, enable_ner: e.target.checked })}
-              className="rounded border-gray-300"
-              id="ner"
+              type="number"
+              value={config.k_rrf_sparse}
+              onChange={(e) => setConfig({ ...config, k_rrf_sparse: Number(e.target.value) })}
+              min={1}
+              max={1000}
+              className="w-full rounded border border-gray-300 px-2 py-1 text-xs"
             />
-            <label htmlFor="ner" className="text-xs text-gray-600">NER preprocessing</label>
+          </div>
+          <div className="flex flex-col gap-3 pt-1">
+            <div className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={config.enable_reranking}
+                onChange={(e) => setConfig({ ...config, enable_reranking: e.target.checked })}
+                className="rounded border-gray-300"
+                id="reranking"
+              />
+              <label htmlFor="reranking" className="text-xs text-gray-600">Reranking</label>
+            </div>
+            <div className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={config.enable_ner}
+                onChange={(e) => setConfig({ ...config, enable_ner: e.target.checked })}
+                className="rounded border-gray-300"
+                id="ner"
+              />
+              <label htmlFor="ner" className="text-xs text-gray-600">NER preprocessing</label>
+            </div>
           </div>
         </div>
       )}
