@@ -233,3 +233,17 @@ class DocumentRepository:
                 document_id,
             )
             return result == "UPDATE 1"
+
+    async def hold_document(self, document_id: str) -> bool:
+        """Place a document on hold. Returns True if a row was updated."""
+        async with self.pool.acquire() as conn:
+            result = await conn.execute(
+                """
+                UPDATE parent_documents
+                SET status='on_hold',
+                    error_message='Placed on hold by admin'
+                WHERE parent_document_id=$1::uuid
+                """,
+                document_id,
+            )
+            return result == "UPDATE 1"

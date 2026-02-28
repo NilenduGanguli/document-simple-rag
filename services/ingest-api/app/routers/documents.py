@@ -672,3 +672,182 @@ async def reprocess_document(
             f"force_ocr={body.force_ocr}."
         ),
     }
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# POST /documents/{document_id}/hold
+# ──────────────────────────────────────────────────────────────────────────────
+
+@router.post(
+    "/{document_id}/hold",
+    status_code=status.HTTP_200_OK,
+    summary="Place a document on hold, stopping further processing",
+    responses={
+        200: {"description": "Document placed on hold"},
+        404: {"description": "Document not found"},
+        409: {"description": "Document cannot be placed on hold in its current state"},
+    },
+)
+async def hold_document(
+    document_id: str,
+    request: Request,
+    key_hash: str = Depends(_authenticate),
+) -> dict:
+    """
+    Stop processing for a document and place it on hold.
+
+    Only documents with status 'pending', 'ingesting', 'chunking', or
+    'embedding' can be placed on hold. From the 'on_hold' state, the document
+    can be deleted or reprocessed.
+
+    Sets a Redis flag so the ingestion worker will abort processing if it picks
+    up the document before the status update propagates.
+    """
+    doc_repo = DocumentRepository(request.app.state.db_pool)
+    doc = await doc_repo.get_by_id(document_id)
+
+    if doc is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Document '{document_id}' not found.",
+        )
+
+    _HOLDABLE_STATUSES = {"pending", "ingesting", "chunking", "embedding"}
+    current_status = doc.get("status")
+    if current_status not in _HOLDABLE_STATUSES:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Document cannot be placed on hold (status='{current_status}'). "
+                "Only pending or in-progress documents can be held."
+            ),
+        )
+
+    # Set Redis hold flag (checked by ingestion worker before each stage)
+    redis = request.app.state.redis
+    try:
+        await redis.set(f"doc:hold:{document_id}", "1", ex=86400)
+    except Exception as exc:
+        logger.warning(
+            "Redis hold flag set failed (non-fatal)",
+            document_id=document_id,
+            error=str(exc),
+        )
+
+    # Update DB status
+    held = await doc_repo.hold_document(document_id)
+    if not held:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to update document status in the database.",
+        )
+
+    logger.info(
+        "Document placed on hold",
+        document_id=document_id,
+        previous_status=current_status,
+    )
+    return {
+        "document_id": document_id,
+        "status": "on_hold",
+        "previous_status": current_status,
+        "message": f"Document placed on hold (was '{current_status}'). It can now be deleted or reprocessed.",
+    }
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# POST /documents/{document_id}/resume
+# ──────────────────────────────────────────────────────────────────────────────
+
+@router.post(
+    "/{document_id}/resume",
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Resume processing for a held document",
+    responses={
+        202: {"description": "Document resumed for processing"},
+        404: {"description": "Document not found"},
+        409: {"description": "Document is not on hold"},
+    },
+)
+async def resume_document(
+    document_id: str,
+    request: Request,
+    key_hash: str = Depends(_authenticate),
+) -> dict:
+    """
+    Resume processing for a document that was placed on hold.
+
+    Resets the document to 'pending' status, clears the Redis hold flag,
+    and re-publishes the ingestion task to the queue.
+    """
+    doc_repo = DocumentRepository(request.app.state.db_pool)
+    doc = await doc_repo.get_by_id(document_id)
+
+    if doc is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Document '{document_id}' not found.",
+        )
+
+    if doc.get("status") != "on_hold":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Document is not on hold (status='{doc.get('status')}').",
+        )
+
+    # Clear Redis hold flag
+    redis = request.app.state.redis
+    try:
+        await redis.delete(f"doc:hold:{document_id}")
+    except Exception as exc:
+        logger.warning(
+            "Redis hold flag clear failed (non-fatal)",
+            document_id=document_id,
+            error=str(exc),
+        )
+
+    # Reset document to pending
+    await doc_repo.reset_for_reprocess(document_id)
+
+    # Re-publish ingestion task
+    task_body: bytes = msgpack.packb({
+        "parent_document_id": document_id,
+        "s3_bucket": doc["s3_bucket"],
+        "s3_key": doc["s3_key"],
+        "filename": doc["filename"],
+        "file_size_bytes": doc.get("file_size_bytes", 0),
+        "mime_type": doc.get("mime_type", "application/pdf"),
+        "priority": 1,
+        "retry_count": 0,
+        "created_at": time.time(),
+        "source_metadata": doc.get("source_metadata") or {},
+    })
+
+    try:
+        channel = request.app.state.rabbit_channel
+        exchange = await channel.declare_exchange(
+            EXCHANGE_INGESTION,
+            type=aio_pika.ExchangeType.DIRECT,
+            durable=True,
+            passive=False,
+        )
+        amqp_message = aio_pika.Message(
+            body=task_body,
+            content_type="application/msgpack",
+            delivery_mode=aio_pika.DeliveryMode.PERSISTENT,
+            message_id=document_id,
+        )
+        await exchange.publish(amqp_message, routing_key=RK_INGEST)
+        logger.info("Resume task published", document_id=document_id)
+    except Exception as exc:
+        logger.error(
+            "RabbitMQ publish failed for resume — document reset to pending but NOT queued",
+            document_id=document_id,
+            error=str(exc),
+        )
+
+    return {
+        "document_id": document_id,
+        "status": "accepted",
+        "message": "Document resumed and requeued for processing.",
+    }

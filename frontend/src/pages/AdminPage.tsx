@@ -13,9 +13,12 @@ const STATUS_COLOR: Record<string, string> = {
   chunking: 'bg-blue-100 text-blue-700',
   embedding: 'bg-purple-100 text-purple-700',
   failed: 'bg-red-100 text-red-700',
+  on_hold: 'bg-orange-100 text-orange-700',
 };
 
-const STATUS_OPTIONS = ['', 'ready', 'pending', 'ingesting', 'chunking', 'embedding', 'failed'];
+const STATUS_OPTIONS = ['', 'ready', 'pending', 'ingesting', 'chunking', 'embedding', 'failed', 'on_hold'];
+
+const HOLDABLE_STATUSES = new Set(['pending', 'ingesting', 'chunking', 'embedding']);
 
 function formatBytes(bytes: number | null): string {
   if (!bytes) return '—';
@@ -123,6 +126,28 @@ export default function AdminPage() {
     refetch();
   }
 
+  async function handleHold(doc: DocumentSummary) {
+    setActionError(null);
+    try {
+      const resp = await ingestApi.holdDocument(doc.document_id);
+      showSuccess(resp.message || `"${doc.filename}" placed on hold.`);
+      refetch();
+    } catch (e: any) {
+      setActionError(e.message || 'Hold failed');
+    }
+  }
+
+  async function handleResume(doc: DocumentSummary) {
+    setActionError(null);
+    try {
+      const resp = await ingestApi.resumeDocument(doc.document_id);
+      showSuccess(resp.message || `"${doc.filename}" resumed.`);
+      refetch();
+    } catch (e: any) {
+      setActionError(e.message || 'Resume failed');
+    }
+  }
+
   return (
     <div className="flex h-full flex-col gap-4 p-6">
       {/* Header */}
@@ -141,11 +166,12 @@ export default function AdminPage() {
 
       {/* Stats bar */}
       {stats && (
-        <div className="grid grid-cols-4 gap-3">
+        <div className="grid grid-cols-5 gap-3">
           {[
             ['Total', total, 'text-gray-900'],
             ['Ready', statusCounts['ready'] ?? 0, 'text-emerald-600'],
             ['Pending / Processing', (statusCounts['pending'] ?? 0) + (statusCounts['ingesting'] ?? 0) + (statusCounts['chunking'] ?? 0) + (statusCounts['embedding'] ?? 0), 'text-blue-600'],
+            ['On Hold', statusCounts['on_hold'] ?? 0, 'text-orange-600'],
             ['Failed', statusCounts['failed'] ?? 0, 'text-red-600'],
           ].map(([label, value, color]) => (
             <div key={label as string} className="rounded-lg border border-gray-200 bg-white p-4">
@@ -187,7 +213,7 @@ export default function AdminPage() {
             >
               {STATUS_OPTIONS.map((s) => (
                 <option key={s} value={s}>
-                  {s === '' ? 'All statuses' : s}
+                  {s === '' ? 'All statuses' : s === 'on_hold' ? 'On Hold' : s}
                 </option>
               ))}
             </select>
@@ -235,6 +261,8 @@ export default function AdminPage() {
                   {filtered.map((doc) => {
                     const isSelected = selectedIds.has(doc.document_id);
                     const isActive = selectedDoc?.document_id === doc.document_id;
+                    const canHold = HOLDABLE_STATUSES.has(doc.status);
+                    const isHeld = doc.status === 'on_hold';
                     return (
                       <tr
                         key={doc.document_id}
@@ -261,7 +289,7 @@ export default function AdminPage() {
                               STATUS_COLOR[doc.status] ?? 'bg-gray-100 text-gray-600'
                             }`}
                           >
-                            {doc.status}
+                            {doc.status === 'on_hold' ? 'on hold' : doc.status}
                           </span>
                         </td>
                         <td className="px-3 py-2 text-gray-600">{doc.chunk_count}</td>
@@ -271,7 +299,23 @@ export default function AdminPage() {
                           className="px-3 py-2"
                           onClick={(e) => e.stopPropagation()}
                         >
-                          <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-1">
+                            {canHold && (
+                              <button
+                                onClick={() => handleHold(doc)}
+                                className="rounded px-2 py-1 text-xs text-orange-600 hover:bg-orange-50"
+                              >
+                                Hold
+                              </button>
+                            )}
+                            {isHeld && (
+                              <button
+                                onClick={() => handleResume(doc)}
+                                className="rounded px-2 py-1 text-xs text-emerald-600 hover:bg-emerald-50"
+                              >
+                                Resume
+                              </button>
+                            )}
                             <button
                               onClick={() => setReprocessDoc(doc)}
                               className="rounded px-2 py-1 text-xs text-blue-600 hover:bg-blue-50"
@@ -326,7 +370,7 @@ export default function AdminPage() {
                 {/* Meta */}
                 <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
                   {[
-                    ['Status', selectedDoc.status],
+                    ['Status', selectedDoc.status === 'on_hold' ? 'on hold' : selectedDoc.status],
                     ['Chunks', selectedDoc.chunk_count],
                     ['Size', formatBytes(selectedDoc.file_size_bytes)],
                     ['Pages', selectedDoc.page_count ?? '—'],
@@ -341,13 +385,33 @@ export default function AdminPage() {
                 </dl>
 
                 {selectedDoc.error_message && selectedDoc.error_message !== 'deleted' && (
-                  <p className="mt-2 rounded bg-red-50 px-2 py-1 text-xs text-red-700">
+                  <p className={`mt-2 rounded px-2 py-1 text-xs ${
+                    selectedDoc.status === 'on_hold'
+                      ? 'bg-orange-50 text-orange-700'
+                      : 'bg-red-50 text-red-700'
+                  }`}>
                     {selectedDoc.error_message}
                   </p>
                 )}
 
                 {/* Actions */}
                 <div className="mt-3 flex gap-2">
+                  {HOLDABLE_STATUSES.has(selectedDoc.status) && (
+                    <button
+                      onClick={() => handleHold(selectedDoc)}
+                      className="flex-1 rounded-md bg-orange-50 px-3 py-1.5 text-xs font-medium text-orange-600 hover:bg-orange-100"
+                    >
+                      Hold
+                    </button>
+                  )}
+                  {selectedDoc.status === 'on_hold' && (
+                    <button
+                      onClick={() => handleResume(selectedDoc)}
+                      className="flex-1 rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-700"
+                    >
+                      Resume
+                    </button>
+                  )}
                   <button
                     onClick={() => setReprocessDoc(selectedDoc)}
                     className="flex-1 rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700"

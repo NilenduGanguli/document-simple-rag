@@ -149,6 +149,14 @@ class IngestionWorker:
     # Core document processing
     # ------------------------------------------------------------------
 
+    async def _is_on_hold(self, doc_id: str) -> bool:
+        """Check Redis for a hold flag set by the admin hold endpoint."""
+        try:
+            flag = await self.redis.get(f"doc:hold:{doc_id}")
+            return flag is not None
+        except Exception:
+            return False
+
     async def _process_document(
         self,
         message: aio_pika.IncomingMessage,
@@ -173,6 +181,12 @@ class IngestionWorker:
             chunking_strategy = payload.get('chunking_strategy')   # None → env default
 
             try:
+                # Check hold flag before starting
+                if await self._is_on_hold(doc_id):
+                    logger.info(f"Doc {doc_id}: on hold — skipping processing")
+                    await self.doc_repo.update_status(doc_id, 'on_hold', error_message='Placed on hold by admin')
+                    return
+
                 await self.doc_repo.update_status(doc_id, 'ingesting')
 
                 # 1. Download PDF
@@ -192,6 +206,12 @@ class IngestionWorker:
                     has_text=routing_result.has_text,
                     has_images=routing_result.has_images,
                 )
+
+                # Check hold flag after routing/OCR (long-running stage)
+                if await self._is_on_hold(doc_id):
+                    logger.info(f"Doc {doc_id}: on hold after routing — aborting")
+                    await self.doc_repo.update_status(doc_id, 'on_hold', error_message='Placed on hold by admin')
+                    return
 
                 # 3. Dispatch OCR for image pages concurrently
                 if routing_result.images:
@@ -248,6 +268,12 @@ class IngestionWorker:
 
                 # 6. Persist chunks
                 chunk_ids = await self.chunk_repo.bulk_insert(chunks_for_db)
+
+                # Check hold flag before publishing embeddings
+                if await self._is_on_hold(doc_id):
+                    logger.info(f"Doc {doc_id}: on hold after chunking — aborting before embedding")
+                    await self.doc_repo.update_status(doc_id, 'on_hold', error_message='Placed on hold by admin')
+                    return
 
                 # 7. Update status and publish to embedding queue
                 await self.doc_repo.update_status(doc_id, 'chunking')
