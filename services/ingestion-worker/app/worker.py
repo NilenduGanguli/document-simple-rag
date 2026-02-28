@@ -34,6 +34,8 @@ from typing import List
 import aio_pika
 import msgpack
 
+from opentelemetry import context as otel_context, trace
+
 from rag_shared.db.repositories.document_repo import DocumentRepository
 from rag_shared.db.repositories.chunk_repo import ChunkRepository
 from rag_shared.queue.schemas import OCRResult, EmbeddingTask
@@ -47,6 +49,7 @@ from rag_shared.queue.topology import (
     RK_EMBED,
     RK_OCR,
 )
+from rag_shared.tracing.otel import inject_trace_context, extract_trace_context
 
 from .router import IngestionRouter
 from .preprocessor import TextPreprocessor
@@ -170,6 +173,10 @@ class IngestionWorker:
         original is always ACKed inside this context.
         """
         async with message.process(requeue=False):
+            # Extract trace context propagated from ingest-api
+            ctx = extract_trace_context(dict(message.headers) if message.headers else None)
+            token = otel_context.attach(ctx) if ctx else None
+
             payload = msgpack.unpackb(message.body, raw=False)
             doc_id = payload['parent_document_id']
 
@@ -179,6 +186,14 @@ class IngestionWorker:
             chunk_max_tokens = payload.get('chunk_max_tokens')    # None → env default
             chunk_overlap_tokens = payload.get('chunk_overlap_tokens')  # None → env default
             chunking_strategy = payload.get('chunking_strategy')   # None → env default
+
+            tracer = trace.get_tracer("ingestion-worker")
+            # Create a span so Jaeger sees the ingestion-worker → ingest-api dependency
+            span = tracer.start_span("ingest.process_document", attributes={
+                "document.id": doc_id,
+            })
+            span_ctx = trace.set_span_in_context(span)
+            span_token = otel_context.attach(span_ctx)
 
             try:
                 # Check hold flag before starting
@@ -293,7 +308,14 @@ class IngestionWorker:
                 )
 
             except Exception as exc:
+                span.set_status(trace.StatusCode.ERROR, str(exc))
+                span.record_exception(exc)
                 await self._handle_failure(doc_id, exc, payload, channel)
+            finally:
+                span.end()
+                otel_context.detach(span_token)
+                if token is not None:
+                    otel_context.detach(token)
 
     # ------------------------------------------------------------------
     # OCR RPC dispatch
@@ -377,6 +399,7 @@ class IngestionWorker:
                     correlation_id=correlation_id,
                     reply_to=callback_queue.name,
                     delivery_mode=aio_pika.DeliveryMode.PERSISTENT,
+                    headers=inject_trace_context(),
                 ),
                 routing_key=RK_OCR,
             )
@@ -453,6 +476,7 @@ class IngestionWorker:
                     body=body,
                     content_type='application/x-msgpack',
                     delivery_mode=aio_pika.DeliveryMode.PERSISTENT,
+                    headers=inject_trace_context(),
                 ),
                 routing_key=RK_EMBED,
             )
@@ -522,7 +546,7 @@ class IngestionWorker:
                 body=body,
                 content_type='application/x-msgpack',
                 delivery_mode=aio_pika.DeliveryMode.PERSISTENT,
-                headers={'x-retry-count': retry_count},
+                headers={**inject_trace_context(), 'x-retry-count': retry_count},
             ),
             routing_key=RK_INGEST,
         )
@@ -544,7 +568,7 @@ class IngestionWorker:
                 body=body,
                 content_type='application/x-msgpack',
                 delivery_mode=aio_pika.DeliveryMode.PERSISTENT,
-                headers={'x-failure-reason': error_message[:255]},
+                headers={**inject_trace_context(), 'x-failure-reason': error_message[:255]},
             ),
             routing_key=RK_INGEST,
         )

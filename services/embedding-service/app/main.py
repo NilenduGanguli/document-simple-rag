@@ -26,6 +26,7 @@ from rag_shared.queue.connection import get_rabbit_connection
 from rag_shared.onnx.session_pool import ONNXSessionPool
 from rag_shared.logging.setup import configure_structlog
 from rag_shared.metrics import get_metrics_app
+from rag_shared.tracing.otel import configure_tracer
 
 from app.startup import verify_model_integrity, warm_up_onnx_pool
 from app.worker import EmbeddingWorker
@@ -56,6 +57,10 @@ ONNX_MODEL_PATH = str(MODEL_BASE / 'embedding' / 'int8' / 'model.onnx')
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     configure_structlog(service_name='embedding-service')
+    configure_tracer(
+        settings.otel_service_name or "embedding-service",
+        settings.jaeger_endpoint,
+    )
     logger.info("Embedding service starting up")
 
     # 1. Verify model integrity (raises RuntimeError if model is not ready)
@@ -149,6 +154,13 @@ app = FastAPI(
 
 # Mount Prometheus metrics at /metrics
 app.mount("/metrics", get_metrics_app())
+
+# OpenTelemetry FastAPI auto-instrumentation
+try:
+    from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+    FastAPIInstrumentor().instrument_app(app)
+except ImportError:
+    pass
 
 
 # ---------------------------------------------------------------------------

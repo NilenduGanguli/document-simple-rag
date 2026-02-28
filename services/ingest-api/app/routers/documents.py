@@ -36,6 +36,7 @@ from rag_shared.metrics import ingest_documents_total
 from rag_shared.queue.schemas import IngestionTask
 from rag_shared.queue.topology import EXCHANGE_INGESTION, RK_INGEST
 from rag_shared.storage.s3_client import S3Client
+from rag_shared.tracing.otel import inject_trace_context
 
 from ..schemas import ChunkItem, ChunksResponse, DocumentStatus, IngestResponse, ReprocessRequest
 
@@ -298,6 +299,7 @@ async def ingest_document(
             content_type="application/msgpack",
             delivery_mode=aio_pika.DeliveryMode.PERSISTENT,
             message_id=document_id,
+            headers=inject_trace_context(),
         )
         await exchange.publish(amqp_message, routing_key=RK_INGEST)
         logger.info(
@@ -642,6 +644,7 @@ async def reprocess_document(
             content_type="application/msgpack",
             delivery_mode=aio_pika.DeliveryMode.PERSISTENT,
             message_id=document_id,
+            headers=inject_trace_context(),
         )
         await exchange.publish(amqp_message, routing_key=RK_INGEST)
         logger.info(
@@ -836,6 +839,7 @@ async def resume_document(
             content_type="application/msgpack",
             delivery_mode=aio_pika.DeliveryMode.PERSISTENT,
             message_id=document_id,
+            headers=inject_trace_context(),
         )
         await exchange.publish(amqp_message, routing_key=RK_INGEST)
         logger.info("Resume task published", document_id=document_id)
