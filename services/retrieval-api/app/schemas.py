@@ -62,6 +62,14 @@ class RetrievalConfig(BaseModel):
         default=False,
         description="Enable NER-based query preprocessing (disabled by default).",
     )
+    enable_stopword_removal_dense: bool = Field(
+        default=True,
+        description="Remove common English stopwords from the query before dense (embedding) search.",
+    )
+    enable_stopword_removal_sparse: bool = Field(
+        default=True,
+        description="Remove common English stopwords from the query before sparse (BM25) search.",
+    )
     k_rrf_dense: int = Field(
         default=60,
         ge=1,

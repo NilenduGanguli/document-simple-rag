@@ -24,6 +24,8 @@ export default function QueryForm({ onSubmit, isLoading }: Props) {
     mmr_lambda: 0.7,
     enable_reranking: true,
     enable_ner: false,
+    enable_stopword_removal_dense: true,
+    enable_stopword_removal_sparse: true,
     k_rrf_dense: 60,
     k_rrf_sparse: 60,
   });
@@ -210,6 +212,26 @@ export default function QueryForm({ onSubmit, isLoading }: Props) {
                 id="ner"
               />
               <label htmlFor="ner" className="text-xs text-gray-600">NER preprocessing</label>
+            </div>
+            <div className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={config.enable_stopword_removal_dense}
+                onChange={(e) => setConfig({ ...config, enable_stopword_removal_dense: e.target.checked })}
+                className="rounded border-gray-300"
+                id="stopword-removal-dense"
+              />
+              <label htmlFor="stopword-removal-dense" className="text-xs text-gray-600">Stopword removal (dense)</label>
+            </div>
+            <div className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={config.enable_stopword_removal_sparse}
+                onChange={(e) => setConfig({ ...config, enable_stopword_removal_sparse: e.target.checked })}
+                className="rounded border-gray-300"
+                id="stopword-removal-sparse"
+              />
+              <label htmlFor="stopword-removal-sparse" className="text-xs text-gray-600">Stopword removal (sparse)</label>
             </div>
           </div>
         </div>
