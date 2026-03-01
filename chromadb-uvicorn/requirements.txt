@@ -1,0 +1,4 @@
+chromadb>=0.4.22
+uvicorn[standard]>=0.23.0
+fastapi>=0.95.0
+opentelemetry-instrumentation-fastapi>=0.50b0

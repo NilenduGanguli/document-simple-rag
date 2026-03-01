@@ -116,6 +116,8 @@ export interface RetrievalConfig {
   mmr_lambda?: number;
   enable_reranking?: boolean;
   enable_ner?: boolean;
+  enable_stopword_removal_dense?: boolean;
+  enable_stopword_removal_sparse?: boolean;
   k_rrf_dense?: number;
   k_rrf_sparse?: number;
 }

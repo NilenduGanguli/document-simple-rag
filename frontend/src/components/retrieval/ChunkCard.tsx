@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import React, { useState } from 'react';
 import type { ChunkResult } from '../../types';
 
 interface Props {
@@ -12,23 +12,107 @@ interface Props {
   onViewPDF?: (docId: string) => void;
 }
 
+// Mirrors the backend _ENGLISH_STOPWORDS set. Standalone stopword matches are
+// not highlighted; stopwords within a matched phrase are highlighted together
+// with the surrounding content words.
+const HIGHLIGHT_STOPWORDS = new Set([
+  'a', 'about', 'above', 'after', 'again', 'against', 'all', 'am', 'an',
+  'and', 'any', 'are', "aren't", 'as', 'at', 'be', 'because', 'been',
+  'before', 'being', 'below', 'between', 'both', 'but', 'by', "can't",
+  'cannot', 'could', "couldn't", 'did', "didn't", 'do', 'does', "doesn't",
+  'doing', "don't", 'down', 'during', 'each', 'few', 'for', 'from',
+  'further', 'get', 'got', 'had', "hadn't", 'has', "hasn't", 'have',
+  "haven't", 'having', 'he', "he'd", "he'll", "he's", 'her', 'here',
+  "here's", 'hers', 'herself', 'him', 'himself', 'his', 'how', "how's",
+  'i', "i'd", "i'll", "i'm", "i've", 'if', 'in', 'into', 'is', "isn't",
+  'it', "it's", 'its', 'itself', "let's", 'me', 'more', 'most', "mustn't",
+  'my', 'myself', 'no', 'nor', 'not', 'of', 'off', 'on', 'once', 'only',
+  'or', 'other', 'ought', 'our', 'ours', 'ourselves', 'out', 'over', 'own',
+  'same', "shan't", 'she', "she'd", "she'll", "she's", 'should',
+  "shouldn't", 'so', 'some', 'such', 'than', 'that', "that's", 'the',
+  'their', 'theirs', 'them', 'themselves', 'then', 'there', "there's",
+  'these', 'they', "they'd", "they'll", "they're", "they've", 'this',
+  'those', 'through', 'to', 'too', 'under', 'until', 'up', 'very', 'was',
+  "wasn't", 'we', "we'd", "we'll", "we're", "we've", 'were', "weren't",
+  'what', "what's", 'when', "when's", 'where', "where's", 'which', 'while',
+  'who', "who's", 'whom', 'why', "why's", 'with', "won't", 'would',
+  "wouldn't", 'you', "you'd", "you'll", "you're", "you've", 'your',
+  'yours', 'yourself', 'yourselves',
+]);
+
 export default function ChunkCard({ chunk, query, filename, onViewDocument, onViewPDF }: Props) {
   const [expanded, setExpanded] = useState(false);
 
-  // Simple highlight: wrap query terms in the chunk text
+  // Phrase-aware highlighting:
+  // 1. Multi-word phrase matches from the query highlight the whole phrase
+  //    (stopwords within the phrase are highlighted together with content words).
+  // 2. Individual non-stopword content words are highlighted on their own.
+  // 3. Standalone stopwords are never highlighted.
   const highlightText = (text: string) => {
     if (!query.trim()) return text;
-    const words = query.trim().split(/\s+/).filter(w => w.length > 2);
-    if (words.length === 0) return text;
-    const regex = new RegExp(`(${words.map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})`, 'gi');
-    const parts = text.split(regex);
-    return parts.map((part, i) =>
-      regex.test(part) ? (
-        <mark key={i} className="bg-yellow-200 text-yellow-900 rounded px-0.5">{part}</mark>
-      ) : (
-        <span key={i}>{part}</span>
-      )
-    );
+
+    const queryWords = query.trim().toLowerCase().split(/\s+/);
+    const lowerText = text.toLowerCase();
+    const ranges: { start: number; end: number }[] = [];
+
+    // Step 1: multi-word phrase matches (try longest phrases first)
+    for (let len = queryWords.length; len >= 2; len--) {
+      for (let i = 0; i <= queryWords.length - len; i++) {
+        const phrase = queryWords.slice(i, i + len).join(' ');
+        let pos = 0;
+        while ((pos = lowerText.indexOf(phrase, pos)) !== -1) {
+          const end = pos + phrase.length;
+          if (!ranges.some(r => r.start < end && r.end > pos)) {
+            ranges.push({ start: pos, end });
+          }
+          pos++;
+        }
+      }
+    }
+
+    // Step 2: single content words (non-stopword, length > 2) not already covered
+    const contentWords = queryWords.filter(w => w.length > 2 && !HIGHLIGHT_STOPWORDS.has(w));
+    if (contentWords.length > 0) {
+      const escaped = contentWords.map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+      const wordRegex = new RegExp(`(${escaped.join('|')})`, 'gi');
+      let match: RegExpExecArray | null;
+      while ((match = wordRegex.exec(text)) !== null) {
+        const start = match.index;
+        const end = start + match[0].length;
+        if (!ranges.some(r => r.start < end && r.end > start)) {
+          ranges.push({ start, end });
+        }
+      }
+    }
+
+    if (ranges.length === 0) return text;
+
+    // Step 3: sort and merge overlapping ranges
+    ranges.sort((a, b) => a.start - b.start);
+    const merged: { start: number; end: number }[] = [];
+    for (const r of ranges) {
+      const last = merged[merged.length - 1];
+      if (last && r.start <= last.end) {
+        last.end = Math.max(last.end, r.end);
+      } else {
+        merged.push({ ...r });
+      }
+    }
+
+    // Step 4: render segments
+    const parts: React.ReactNode[] = [];
+    let cursor = 0;
+    merged.forEach(({ start, end }, i) => {
+      if (cursor < start) parts.push(<span key={`t${i}`}>{text.slice(cursor, start)}</span>);
+      parts.push(
+        <mark key={`m${i}`} className="bg-yellow-200 text-yellow-900 rounded px-0.5">
+          {text.slice(start, end)}
+        </mark>
+      );
+      cursor = end;
+    });
+    if (cursor < text.length) parts.push(<span key="tail">{text.slice(cursor)}</span>);
+    return parts;
   };
 
   const displayText = expanded ? chunk.chunk_text : chunk.chunk_text.slice(0, 300);

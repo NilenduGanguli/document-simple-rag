@@ -305,9 +305,15 @@ async def retrieve(
         entities = []
     latency['ner_ms'] = (time.monotonic() - t0) * 1000
 
+    # ── 2b. Stopword removal (per-search-type) ───────────────────────────────
+    if config.enable_stopword_removal_dense or config.enable_stopword_removal_sparse:
+        from app.pipeline.query_preprocessor import _remove_stopwords
+    dense_query = _remove_stopwords(processed_query) if config.enable_stopword_removal_dense else processed_query
+    sparse_query = _remove_stopwords(processed_query) if config.enable_stopword_removal_sparse else processed_query
+
     # ── 3. Embed query ────────────────────────────────────────────────────────
     t0 = time.monotonic()
-    query_embedding = await _embed_query(processed_query, app_state)
+    query_embedding = await _embed_query(dense_query, app_state)
     latency['embedding_ms'] = (time.monotonic() - t0) * 1000
 
     # ── 4. Dense vector search (ChromaDB) ───────────────────────────────────
@@ -330,7 +336,7 @@ async def retrieve(
     # ── 5. Sparse BM25 search ─────────────────────────────────────────────────
     t0 = time.monotonic()
     sparse_results = sparse_search(
-        query=request_body.query,
+        query=sparse_query,
         bm25_manager=bm25_mgr,
         k=config.sparse_candidates,
     )
@@ -362,7 +368,7 @@ async def retrieve(
     if config.enable_reranking and reranker is not None:
         t0 = time.monotonic()
         mmr_results = await reranker.rerank(
-            query=processed_query,
+            query=dense_query,
             candidates=mmr_results[: config.rerank_candidates],
         )
         latency['rerank_ms'] = (time.monotonic() - t0) * 1000

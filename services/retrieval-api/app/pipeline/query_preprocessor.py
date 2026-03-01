@@ -163,6 +163,48 @@ def _normalise(text: str) -> str:
     return text
 
 
+# Common English stopwords to filter from queries.
+_ENGLISH_STOPWORDS: frozenset[str] = frozenset({
+    'a', 'about', 'above', 'after', 'again', 'against', 'all', 'am', 'an',
+    'and', 'any', 'are', "aren't", 'as', 'at', 'be', 'because', 'been',
+    'before', 'being', 'below', 'between', 'both', 'but', 'by', "can't",
+    'cannot', 'could', "couldn't", 'did', "didn't", 'do', 'does', "doesn't",
+    'doing', "don't", 'down', 'during', 'each', 'few', 'for', 'from',
+    'further', 'get', 'got', 'had', "hadn't", 'has', "hasn't", 'have',
+    "haven't", 'having', 'he', "he'd", "he'll", "he's", 'her', 'here',
+    "here's", 'hers', 'herself', 'him', 'himself', 'his', 'how', "how's",
+    'i', "i'd", "i'll", "i'm", "i've", 'if', 'in', 'into', 'is', "isn't",
+    'it', "it's", 'its', 'itself', "let's", 'me', 'more', 'most', "mustn't",
+    'my', 'myself', 'no', 'nor', 'not', 'of', 'off', 'on', 'once', 'only',
+    'or', 'other', 'ought', 'our', 'ours', 'ourselves', 'out', 'over', 'own',
+    'same', "shan't", 'she', "she'd", "she'll", "she's", 'should',
+    "shouldn't", 'so', 'some', 'such', 'than', 'that', "that's", 'the',
+    'their', 'theirs', 'them', 'themselves', 'then', 'there', "there's",
+    'these', 'they', "they'd", "they'll", "they're", "they've", 'this',
+    'those', 'through', 'to', 'too', 'under', 'until', 'up', 'very', 'was',
+    "wasn't", 'we', "we'd", "we'll", "we're", "we've", 'were', "weren't",
+    'what', "what's", 'when', "when's", 'where', "where's", 'which', 'while',
+    'who', "who's", 'whom', 'why', "why's", 'with', "won't", 'would',
+    "wouldn't", 'you', "you'd", "you'll", "you're", "you've", 'your',
+    'yours', 'yourself', 'yourselves',
+})
+
+
+def _remove_stopwords(text: str) -> str:
+    """
+    Remove common English stopwords from *text*.
+
+    Words are split on whitespace and filtered against _ENGLISH_STOPWORDS.
+    If all words are stopwords the original text is returned unchanged to
+    avoid producing an empty query.
+    """
+    words = text.split()
+    filtered = [w for w in words if w not in _ENGLISH_STOPWORDS]
+    if not filtered:
+        return text
+    return ' '.join(filtered)
+
+
 def _extract_entities(
     tokens: List[str],
     label_ids: List[int],
