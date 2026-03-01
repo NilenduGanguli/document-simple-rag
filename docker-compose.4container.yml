@@ -1,0 +1,229 @@
+# =============================================================================
+# docker-compose.4container.yml
+#
+# Dev-cluster profile: full RAG functionality in 6 containers.
+#
+#   postgres   — PostgreSQL 16 (standalone)
+#   chromadb   — ChromaDB vector store (standalone)
+#   minio      — MinIO S3-compatible object storage (official image)
+#   minio-init — One-shot bucket initializer (exits after setup)
+#   backend    — Single unified FastAPI server on port 8000
+#               model-init runs once on first boot.
+#   frontend   — Nginx serving pre-built React SPA + reverse proxy
+#
+# Dropped from the full stack (not needed for dev):
+#   redis, rabbitmq, jaeger, prometheus, grafana, postgres-exporter
+# =============================================================================
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # 1. postgres — PostgreSQL 16 (standalone)
+  # ---------------------------------------------------------------------------
+  postgres:
+    build:
+      context: .
+      dockerfile: docker/postgres/Dockerfile
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: raguser
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ragpassword123}
+      POSTGRES_DB: ragdb
+      PGDATA: /var/lib/postgresql/data
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "15432:5432"    # PostgreSQL (optional — dev access)
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U raguser -d ragdb -h localhost"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+    networks:
+      - rag-network
+
+  # ---------------------------------------------------------------------------
+  # 2. chromadb — ChromaDB vector store (standalone)
+  # ---------------------------------------------------------------------------
+  chromadb:
+    build:
+      context: .
+      dockerfile: docker/chromadb/Dockerfile
+    restart: unless-stopped
+    volumes:
+      - chromadb_data:/chroma/chroma
+    ports:
+      - "18200:8000"    # ChromaDB API (optional — dev access)
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/heartbeat')"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks:
+      - rag-network
+
+  # ---------------------------------------------------------------------------
+  # 3. minio — MinIO S3-compatible object storage (official image)
+  # ---------------------------------------------------------------------------
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address :9001
+    environment:
+      MINIO_ROOT_USER:     ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin123}
+    volumes:
+      - minio_data:/data
+    ports:
+      - "19000:9000"    # MinIO S3 API
+      - "19001:9001"    # MinIO console
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks:
+      - rag-network
+
+  # ---------------------------------------------------------------------------
+  # 4. minio-init — one-shot bucket setup (exits after first run)
+  # ---------------------------------------------------------------------------
+  minio-init:
+    image: minio/mc:latest
+    restart: "no"
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: /bin/sh /init.sh
+    environment:
+      MINIO_ROOT_USER:     ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin123}
+    volumes:
+      - ./infra/minio/init.sh:/init.sh:ro
+    networks:
+      - rag-network
+
+  # ---------------------------------------------------------------------------
+  # 5. backend — Unified FastAPI + model-init at startup
+  # ---------------------------------------------------------------------------
+  backend:
+    build:
+      context: .
+      dockerfile: docker/backend/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      chromadb:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    environment:
+      # ── Database ──────────────────────────────────────────────────────────
+      DATABASE_URL: postgresql://raguser:${POSTGRES_PASSWORD:-ragpassword123}@postgres:5432/ragdb
+
+      # ── Object storage ────────────────────────────────────────────────────
+      S3_ENDPOINT_URL: http://minio:9000
+      S3_ACCESS_KEY:   ${MINIO_ROOT_USER:-minioadmin}
+      S3_SECRET_KEY:   ${MINIO_ROOT_PASSWORD:-minioadmin123}
+      S3_BUCKET:       rag-documents
+      S3_EXTERNAL_URL: http://localhost:19000
+
+      # ── Vector database ───────────────────────────────────────────────────
+      CHROMADB_URL: http://chromadb:8000
+
+      # ── Models ───────────────────────────────────────────────────────────
+      MODEL_DEST:           /models
+      MODEL_VERSION:        local-docker-compose
+      HF_MODEL_NAME:        google-bert/bert-base-uncased
+      HF_HUB_CACHE:         /models/_hf_cache
+      FORCE_REINIT:         ${FORCE_MODEL_REINIT:-false}
+      TRANSFORMERS_OFFLINE: "0"
+      HF_HUB_OFFLINE:       "0"
+
+      # ── Inference ─────────────────────────────────────────────────────────
+      ONNX_POOL_SIZE:           "2"
+      ONNX_THREADS_PER_SESSION: "2"
+      EMBEDDING_BATCH_SIZE:     "16"
+      EMBEDDING_MODEL_NAME:     ${EMBEDDING_MODEL_NAME:-bert-base-uncased-int8}
+      TOKENIZER_MODEL:          /models/embedding/int8
+      TOKENIZERS_PARALLELISM:   "false"
+      OMP_NUM_THREADS:          "2"
+      OMP_WAIT_POLICY:          PASSIVE
+      MKL_NUM_THREADS:          "2"
+      GOMP_SPINCOUNT:           "0"
+
+      # ── Pipeline tuning ───────────────────────────────────────────────────
+      WORKER_CONCURRENCY:            "4"
+      OCR_CONCURRENCY_LIMIT:         "2"
+      OCR_CONCURRENCY:               "2"
+      CHUNKING_STRATEGY:             recursive
+      CHUNK_MAX_TOKENS:              "400"
+      CHUNK_OVERLAP_TOKENS:          "50"
+      BM25_REFRESH_INTERVAL_SECONDS: "300"
+      PREFETCH_QUEUE_SIZE:           "4"
+      BATCH_COLLECT_TIMEOUT:         "0.1"
+      MAX_FILE_SIZE_MB:              "500"
+      MAX_QUERY_TOKENS:              "100"
+
+      # ── Security / Auth ───────────────────────────────────────────────────
+      API_KEYS:              ${API_KEYS:-dev-api-key-1,dev-api-key-2}
+      RATE_LIMIT_PER_MINUTE: "1000"
+      RATE_LIMIT_PER_IP:     "500"
+      CORS_ORIGINS:          "*"
+      ENVIRONMENT:           DEV
+      JWT_SECRET:            ${JWT_SECRET:-dev-jwt-secret-change-in-production}
+      JWT_EXPIRY_HOURS:      "8"
+
+      # ── OpenAI (inline OCR) ───────────────────────────────────────────────
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+
+      # ── Tracing (disabled — Jaeger not deployed in dev profile) ──────────
+      JAEGER_ENDPOINT: ""
+    volumes:
+      - models_volume:/models
+    ports:
+      - "18000:8000"    # unified FastAPI
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      interval: 20s
+      timeout: 15s
+      retries: 10
+      start_period: 120s
+    networks:
+      - rag-network
+
+  # ---------------------------------------------------------------------------
+  # 6. frontend — Nginx + pre-built React SPA
+  # ---------------------------------------------------------------------------
+  frontend:
+    build:
+      context: ./frontend-compiled
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "3001:80"
+    networks:
+      - rag-network
+
+# =============================================================================
+# Named Volumes
+# =============================================================================
+volumes:
+  postgres_data:
+  chromadb_data:
+  minio_data:
+  models_volume:
+
+# =============================================================================
+# Networks
+# =============================================================================
+networks:
+  rag-network:
+    driver: bridge

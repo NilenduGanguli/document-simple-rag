@@ -1,5 +1,7 @@
 .PHONY: help build up down logs restart clean migrate-check test-health \
-        shell-postgres shell-redis ps model-reinit build-frontend
+        shell-postgres shell-redis ps model-reinit build-frontend \
+        dev-build dev-up dev-down dev-down-volumes dev-logs dev-logs-backend \
+        dev-test-health dev-shell-postgres dev-model-reinit
 
 # Default target
 help:
@@ -27,6 +29,17 @@ help:
 	@echo "  shell-redis    Open redis-cli shell in the redis container"
 	@echo "  lint           Run ruff linter across all services"
 	@echo "  format         Run ruff formatter across all services"
+	@echo ""
+	@echo "4-container dev-cluster targets (docker-compose.4container.yml):"
+	@echo "  dev-build          Build all 4 container images"
+	@echo "  dev-up             Start the 4-container dev stack"
+	@echo "  dev-down           Stop the 4-container dev stack"
+	@echo "  dev-down-volumes   Stop and remove all dev volumes"
+	@echo "  dev-logs           Follow logs for all 4 containers"
+	@echo "  dev-logs-backend   Follow backend container logs only"
+	@echo "  dev-test-health    Check API health endpoints"
+	@echo "  dev-shell-postgres Open psql in dev infra container"
+	@echo "  dev-model-reinit   Force re-download ONNX models in dev backend"
 
 # ─── Environment ────────────────────────────────────────────────────────────────
 
@@ -129,6 +142,66 @@ test-health:
 clean: down-volumes
 	docker compose rm -f
 	docker rmi -f $$(docker images --filter=reference="document-simple-rag*" -q) 2>/dev/null || true
+
+DEV_COMPOSE := docker compose -f docker-compose.4container.yml
+
+# ─── 4-Container Dev Cluster ─────────────────────────────────────────────────────
+
+dev-build: .env
+	$(DEV_COMPOSE) build --parallel
+
+dev-build-no-cache: .env
+	$(DEV_COMPOSE) build --no-cache --parallel
+
+dev-up: .env
+	$(DEV_COMPOSE) up -d
+	@echo ""
+	@echo "Dev stack (4 containers) is starting. Run 'make dev-logs' to follow progress."
+	@echo "  Frontend:      http://localhost:3001"
+	@echo "  Ingest API:    http://localhost:18000/docs"
+	@echo "  Retrieval API: http://localhost:18001/docs"
+	@echo "  RabbitMQ UI:   http://localhost:15672"
+	@echo "  MinIO Console: http://localhost:19001"
+
+dev-down:
+	$(DEV_COMPOSE) down
+
+dev-down-volumes:
+	$(DEV_COMPOSE) down -v
+
+dev-logs:
+	$(DEV_COMPOSE) logs -f
+
+dev-logs-backend:
+	$(DEV_COMPOSE) logs -f backend
+
+dev-logs-infra:
+	$(DEV_COMPOSE) logs -f infra
+
+dev-logs-storage:
+	$(DEV_COMPOSE) logs -f storage
+
+dev-ps:
+	$(DEV_COMPOSE) ps
+
+dev-test-health:
+	@echo "Checking API health endpoints..."
+	@curl -sf http://localhost:18000/api/v1/health | python3 -m json.tool || echo "ingest-api: UNHEALTHY"
+	@curl -sf http://localhost:18001/api/v1/health | python3 -m json.tool || echo "retrieval-api: UNHEALTHY"
+
+dev-shell-postgres:
+	$(DEV_COMPOSE) exec infra psql -U raguser -d ragdb
+
+dev-shell-redis:
+	$(DEV_COMPOSE) exec infra redis-cli
+
+dev-model-reinit:
+	$(DEV_COMPOSE) stop backend
+	$(DEV_COMPOSE) run --rm -e FORCE_REINIT=true backend /bin/sh -c ". /app/model_init/set-env.sh && python /app/model_init/model_init.py"
+	$(DEV_COMPOSE) start backend
+
+dev-clean: dev-down-volumes
+	$(DEV_COMPOSE) rm -f
 
 # ─── Linting / Formatting ────────────────────────────────────────────────────────
 
