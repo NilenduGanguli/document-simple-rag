@@ -9,7 +9,7 @@ Pipeline per task:
   5. Clean text via TextPreprocessor
   6. Chunk via ChunkingEngine
   7. Bulk-insert chunks into PostgreSQL
-  8. Embed chunks via ONNX + upsert to ChromaDB
+  8. Embed chunks via ONNX + upsert to pgvector
   9. Trigger BM25 refresh
 """
 from __future__ import annotations

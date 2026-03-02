@@ -1,5 +1,6 @@
 -- Enable extensions
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+CREATE EXTENSION IF NOT EXISTS vector;
 
 -- Auto-update updated_at function
 CREATE OR REPLACE FUNCTION update_updated_at_column()
@@ -72,7 +73,21 @@ CREATE TRIGGER update_chunks_updated_at
     BEFORE UPDATE ON chunks
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
--- Note: chunk embeddings are stored in ChromaDB, not PostgreSQL.
+-- Note: chunk embeddings are stored in this table using pgvector.
+
+-- Table 3b: chunk_embeddings (pgvector)
+CREATE TABLE chunk_embeddings (
+    chunk_id             UUID PRIMARY KEY REFERENCES chunks(chunk_id) ON DELETE CASCADE,
+    parent_document_id   UUID NOT NULL,
+    embedding            vector(768) NOT NULL,
+    model_name           TEXT NOT NULL DEFAULT 'bert-base-uncased-int8',
+    model_version        TEXT NOT NULL DEFAULT 'local',
+    created_at           TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX idx_embeddings_parent ON chunk_embeddings(parent_document_id);
+CREATE INDEX idx_embeddings_hnsw ON chunk_embeddings
+    USING hnsw (embedding vector_cosine_ops)
+    WITH (m = 16, ef_construction = 64);
 
 -- Table 3: retrieval_audit
 CREATE TABLE retrieval_audit (

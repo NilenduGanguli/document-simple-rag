@@ -5,7 +5,7 @@ Full hybrid pipeline:
   1. In-memory result cache (TTLCache, 5-min TTL — replaces Redis cache)
   2. NER query preprocessing
   3. Bi-encoder query embedding (ONNX INT8)
-  4. Dense vector search (ChromaDB)
+  4. Dense vector search (pgvector)
   5. Sparse BM25 search
   6. Reciprocal Rank Fusion (RRF)
   7. MMR re-ranking
@@ -259,7 +259,6 @@ async def retrieve(
         db_pool=db_pool,
         k=config.dense_candidates,
         filters=filters_dict,
-        chroma_collection=getattr(app_state, 'chroma_collection', None),
     )
     latency['dense_search_ms'] = (time.monotonic() - t0) * 1000
 

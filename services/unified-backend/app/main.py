@@ -5,13 +5,12 @@ Replaces: ingest-api, ingestion-worker, ocr-api, embedding-service, retrieval-ap
 No Redis, no RabbitMQ. All state in-process.
 
 Lifespan:
-  1. Connect to PostgreSQL (asyncpg pool)
-  2. Connect to ChromaDB
-  3. Load ONNX models (bi-encoder, optional cross-encoder, optional NER)
-  4. Build BM25 index
-  5. Start BM25 refresh background task
-  6. Start ingestion worker pool (asyncio background tasks)
-  7. Set up MinIO S3 client
+  1. Connect to PostgreSQL (asyncpg pool) — embeddings stored via pgvector
+  2. Load ONNX models (bi-encoder, optional cross-encoder, optional NER)
+  3. Build BM25 index
+  4. Start BM25 refresh background task
+  5. Start ingestion worker pool (asyncio background tasks)
+  6. Set up MinIO S3 client
 
 Endpoints:
   POST /api/v1/documents/ingest             — upload PDF
@@ -49,7 +48,6 @@ from transformers import BertTokenizerFast
 
 from rag_shared.config import get_settings
 from rag_shared.db.pool import create_pool, close_pool
-from rag_shared.db.chroma_client import get_chroma_client, get_embedding_collection, close_chroma
 from rag_shared.logging.setup import configure_structlog
 from rag_shared.metrics import get_metrics_app
 from rag_shared.onnx.session_pool import ONNXSessionPool
@@ -123,13 +121,7 @@ async def lifespan(app: FastAPI):
     app.state.db_pool = db_pool
     state.db_pool = db_pool
 
-    # ── 2. ChromaDB client ───────────────────────────────────────────────────
-    chroma_client = await get_chroma_client(settings.chromadb_url)
-    chroma_collection = await get_embedding_collection(chroma_client)
-    app.state.chroma_collection = chroma_collection
-    state.chroma_collection = chroma_collection
-
-    # ── 3. ONNX models ────────────────────────────────────────────────────────
+    # ── 2. ONNX models ────────────────────────────────────────────────────────
 
     # Bi-encoder (required for embedding and retrieval)
     biencoder_onnx = MODEL_BASE / 'embedding' / 'int8' / 'model.onnx'
@@ -214,7 +206,6 @@ async def lifespan(app: FastAPI):
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
 
-    await close_chroma()
     await close_pool()
     logger.info("Unified backend stopped")
 

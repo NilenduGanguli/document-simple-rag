@@ -38,9 +38,6 @@ class Settings(BaseSettings):
     max_file_size_mb: int = Field(default=500)
     worker_concurrency: int = Field(default=6)
 
-    # ChromaDB
-    chromadb_url: str = Field(default="http://localhost:8000")
-
     # Retrieval
     bm25_refresh_interval_seconds: int = Field(default=300)
 

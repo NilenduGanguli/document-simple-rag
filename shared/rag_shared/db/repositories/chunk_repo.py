@@ -174,7 +174,7 @@ class ChunkRepository:
     async def delete_by_document(self, document_id: str) -> int:
         """Hard-delete all chunks for a document.
 
-        Note: Embeddings are stored in ChromaDB and must be deleted separately
+        Note: chunk_embeddings rows are deleted automatically via ON DELETE CASCADE.
         via EmbeddingRepository.delete_by_document().
         Returns the number of chunk rows deleted.
         """

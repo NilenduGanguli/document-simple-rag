@@ -1,39 +1,24 @@
-"""ChromaDB async client factory for vector storage."""
-import logging
-from urllib.parse import urlparse
+"""
+ChromaDB client — replaced by pgvector (PostgreSQL).
 
-import chromadb
-from chromadb.api import AsyncClientAPI
+This module is kept as a stub for backward compatibility with legacy
+microservices that import from it. The unified backend no longer uses ChromaDB.
+"""
+import logging
 
 logger = logging.getLogger(__name__)
 
-_client: AsyncClientAPI | None = None
 
-
-async def get_chroma_client(url: str) -> AsyncClientAPI:
-    """Create or return the singleton async ChromaDB client."""
-    global _client
-    if _client is None:
-        parsed = urlparse(url)
-        host = parsed.hostname or "localhost"
-        port = parsed.port or 8000
-        _client = await chromadb.AsyncHttpClient(host=host, port=port)
-        logger.info(f"ChromaDB client connected: {host}:{port}")
-    return _client
-
-
-async def get_embedding_collection(client: AsyncClientAPI):
-    """Get or create the chunk_embeddings collection with cosine distance."""
-    collection = await client.get_or_create_collection(
-        name="chunk_embeddings",
-        metadata={"hnsw:space": "cosine"},
+async def get_chroma_client(url: str):
+    raise NotImplementedError(
+        "ChromaDB has been replaced by pgvector. "
+        "Use the PostgreSQL connection pool (rag_shared.db.pool) instead."
     )
-    logger.info("ChromaDB collection 'chunk_embeddings' ready")
-    return collection
+
+
+async def get_embedding_collection(client):
+    raise NotImplementedError("ChromaDB has been replaced by pgvector.")
 
 
 async def close_chroma():
-    """Reset the global client reference."""
-    global _client
-    _client = None
-    logger.info("ChromaDB client closed")
+    pass

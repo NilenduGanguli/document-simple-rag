@@ -54,12 +54,8 @@ async def get_stats(
     chunk_by_status = await chunk_repo.count_all_by_embedding_status()
     chunk_total = sum(chunk_by_status.values())
 
-    chroma_collection = getattr(request.app.state, "chroma_collection", None)
-    if chroma_collection is not None:
-        embedding_repo = EmbeddingRepository(chroma_collection)
-        total_embeddings = await embedding_repo.count()
-    else:
-        total_embeddings = 0
+    embedding_repo = EmbeddingRepository(db_pool)
+    total_embeddings = await embedding_repo.count()
 
     async with db_pool.acquire() as conn:
         audit_row = await conn.fetchrow(

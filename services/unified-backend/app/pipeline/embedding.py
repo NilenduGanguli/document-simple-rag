@@ -1,5 +1,5 @@
 """
-Inline ONNX embedding + ChromaDB upsert.
+Inline ONNX embedding + pgvector upsert.
 
 Adapted from services/embedding-service/app/worker.py.
 Called directly in the ingestion worker after chunking.
@@ -16,6 +16,7 @@ from transformers import BertTokenizerFast
 
 from rag_shared.db.repositories.chunk_repo import ChunkRepository
 from rag_shared.db.repositories.document_repo import DocumentRepository
+from rag_shared.db.repositories.embedding_repo import EmbeddingRepository
 from rag_shared.onnx.math_utils import mean_pooling_np, l2_normalize_np
 from rag_shared.metrics import onnx_inference_duration_ms, onnx_pool_wait_ms, embedding_batch_duration_ms
 
@@ -30,7 +31,7 @@ async def embed_and_store_chunks(
     app_state,
 ) -> None:
     """
-    Embed a list of chunks using the ONNX bi-encoder, upsert to ChromaDB,
+    Embed a list of chunks using the ONNX bi-encoder, upsert to pgvector,
     update chunk/document status in Postgres, then trigger BM25 refresh.
 
     Parameters
@@ -42,7 +43,6 @@ async def embed_and_store_chunks(
     session_pool = app_state.biencoder_pool
     tokenizer: BertTokenizerFast = app_state.biencoder_tokenizer
     db_pool = app_state.db_pool
-    chroma_collection = app_state.chroma_collection
     bm25_manager = app_state.bm25_manager
 
     if session_pool is None or tokenizer is None:
@@ -51,6 +51,7 @@ async def embed_and_store_chunks(
 
     chunk_repo = ChunkRepository(db_pool)
     doc_repo = DocumentRepository(db_pool)
+    embedding_repo = EmbeddingRepository(db_pool)
 
     # Update doc status to embedding
     await doc_repo.update_status(doc_id, 'embedding')
@@ -111,20 +112,17 @@ async def embed_and_store_chunks(
         pooled = mean_pooling_np(last_hidden, encoded['attention_mask'])
         normalised = l2_normalize_np(pooled)  # [batch, 768]
 
-        # Build metadata list for ChromaDB
-        metadatas = [
-            {"parent_document_id": str(pid)} for pid in parent_ids
-        ]
-
-        # Upsert to ChromaDB
+        # Upsert to pgvector
         try:
-            await chroma_collection.upsert(
-                ids=ids,
+            await embedding_repo.bulk_upsert(
+                chunk_ids=ids,
+                parent_doc_ids=parent_ids,
                 embeddings=normalised.tolist(),
-                metadatas=metadatas,
+                model_name=os.getenv('EMBEDDING_MODEL_NAME', 'bert-base-uncased-int8'),
+                model_version=os.getenv('MODEL_VERSION', 'local'),
             )
         except Exception as exc:
-            logger.error(f"ChromaDB upsert failed for doc {doc_id}: {exc}")
+            logger.error(f"pgvector upsert failed for doc {doc_id}: {exc}")
             continue
 
         # Update chunk status to 'done'

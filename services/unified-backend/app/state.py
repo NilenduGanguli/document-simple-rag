@@ -71,9 +71,8 @@ class AppState:
         # ── Rate limiter ─────────────────────────────────────────────────────
         self.rate_limiter: InMemoryRateLimiter = InMemoryRateLimiter()
 
-        # ── Database / vector store / object storage (set during lifespan) ──
+        # ── Database / object storage (set during lifespan) ──────────────────
         self.db_pool = None
-        self.chroma_collection = None
         self.s3_client = None
 
         # ── ONNX models (set during lifespan) ────────────────────────────────

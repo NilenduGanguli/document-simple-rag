@@ -1,4 +1,4 @@
-FROM postgres:16-bookworm
+FROM pgvector/pgvector:pg16
 
 # The official postgres image automatically runs all *.sql and *.sh files placed in
 # /docker-entrypoint-initdb.d/ on first startup (when the data directory is empty).

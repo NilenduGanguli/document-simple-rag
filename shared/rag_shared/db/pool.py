@@ -11,6 +11,11 @@ async def create_pool(dsn: str, min_size: int = 5, max_size: int = 20) -> asyncp
 
     async def init_connection(conn):
         await conn.execute("SET search_path TO public")
+        try:
+            from pgvector.asyncpg import register_vector
+            await register_vector(conn)
+        except ImportError:
+            pass
 
     _pool = await asyncpg.create_pool(
         dsn=dsn,

@@ -511,10 +511,8 @@ async def delete_document(
         logger.warning(f"Chunk delete failed (non-fatal): {exc}")
         chunks_deleted = 0
 
-    chroma_collection = getattr(request.app.state, "chroma_collection", None)
-    if chroma_collection is not None:
-        embedding_repo = EmbeddingRepository(chroma_collection)
-        await embedding_repo.delete_by_document(document_id)
+    embedding_repo = EmbeddingRepository(request.app.state.db_pool)
+    await embedding_repo.delete_by_document(document_id)
 
     s3_bucket = doc.get("s3_bucket")
     s3_key = doc.get("s3_key")
@@ -566,10 +564,8 @@ async def reprocess_document(
         logger.warning(f"Chunk pre-delete failed (non-fatal): {exc}")
         chunks_deleted = 0
 
-    chroma_collection = getattr(request.app.state, "chroma_collection", None)
-    if chroma_collection is not None:
-        embedding_repo = EmbeddingRepository(chroma_collection)
-        await embedding_repo.delete_by_document(document_id)
+    embedding_repo = EmbeddingRepository(request.app.state.db_pool)
+    await embedding_repo.delete_by_document(document_id)
 
     await doc_repo.reset_for_reprocess(document_id)
 

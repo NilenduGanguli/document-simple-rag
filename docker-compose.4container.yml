@@ -1,10 +1,9 @@
 # =============================================================================
 # docker-compose.4container.yml
 #
-# Dev-cluster profile: full RAG functionality in 6 containers.
+# Dev-cluster profile: full RAG functionality in 5 containers.
 #
-#   postgres   — PostgreSQL 16 (standalone)
-#   chromadb   — ChromaDB vector store (standalone)
+#   postgres   — PostgreSQL 16 with pgvector (standalone)
 #   minio      — MinIO S3-compatible object storage (official image)
 #   minio-init — One-shot bucket initializer (exits after setup)
 #   backend    — Single unified FastAPI server on port 8000
@@ -12,7 +11,8 @@
 #   frontend   — Nginx serving pre-built React SPA + reverse proxy
 #
 # Dropped from the full stack (not needed for dev):
-#   redis, rabbitmq, jaeger, prometheus, grafana, postgres-exporter
+#   chromadb (replaced by pgvector in postgres), redis, rabbitmq, jaeger,
+#   prometheus, grafana, postgres-exporter
 # =============================================================================
 
 services:
@@ -44,28 +44,7 @@ services:
       - rag-network
 
   # ---------------------------------------------------------------------------
-  # 2. chromadb — ChromaDB vector store (standalone)
-  # ---------------------------------------------------------------------------
-  chromadb:
-    build:
-      context: .
-      dockerfile: docker/chromadb/Dockerfile
-    restart: unless-stopped
-    volumes:
-      - chromadb_data:/chroma/chroma
-    ports:
-      - "18200:8000"    # ChromaDB API (optional — dev access)
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/heartbeat')"]
-      interval: 15s
-      timeout: 10s
-      retries: 5
-      start_period: 30s
-    networks:
-      - rag-network
-
-  # ---------------------------------------------------------------------------
-  # 3. minio — MinIO S3-compatible object storage (official image)
+  # 2. minio — MinIO S3-compatible object storage (official image)
   # ---------------------------------------------------------------------------
   minio:
     image: minio/minio:latest
@@ -89,7 +68,7 @@ services:
       - rag-network
 
   # ---------------------------------------------------------------------------
-  # 4. minio-init — one-shot bucket setup (exits after first run)
+  # 3. minio-init — one-shot bucket setup (exits after first run)
   # ---------------------------------------------------------------------------
   minio-init:
     image: minio/mc:latest
@@ -107,7 +86,7 @@ services:
       - rag-network
 
   # ---------------------------------------------------------------------------
-  # 5. backend — Unified FastAPI + model-init at startup
+  # 4. backend — Unified FastAPI + model-init at startup
   # ---------------------------------------------------------------------------
   backend:
     build:
@@ -116,8 +95,6 @@ services:
     restart: unless-stopped
     depends_on:
       postgres:
-        condition: service_healthy
-      chromadb:
         condition: service_healthy
       minio-init:
         condition: service_completed_successfully
@@ -131,9 +108,6 @@ services:
       S3_SECRET_KEY:   ${MINIO_ROOT_PASSWORD:-minioadmin123}
       S3_BUCKET:       rag-documents
       S3_EXTERNAL_URL: http://localhost:19000
-
-      # ── Vector database ───────────────────────────────────────────────────
-      CHROMADB_URL: http://chromadb:8000
 
       # ── Models ───────────────────────────────────────────────────────────
       MODEL_DEST:           /models
@@ -197,7 +171,7 @@ services:
       - rag-network
 
   # ---------------------------------------------------------------------------
-  # 6. frontend — Nginx + pre-built React SPA
+  # 5. frontend — Nginx + pre-built React SPA
   # ---------------------------------------------------------------------------
   frontend:
     build:
@@ -217,7 +191,6 @@ services:
 # =============================================================================
 volumes:
   postgres_data:
-  chromadb_data:
   minio_data:
   models_volume:
 

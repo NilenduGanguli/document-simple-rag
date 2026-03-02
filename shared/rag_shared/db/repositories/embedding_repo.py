@@ -1,15 +1,16 @@
-"""Embedding repository backed by ChromaDB."""
+"""Embedding repository backed by PostgreSQL pgvector."""
 import logging
-from typing import Optional
+
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
 
 class EmbeddingRepository:
-    """Store and query vector embeddings in a ChromaDB collection."""
+    """Store and query vector embeddings in the chunk_embeddings table (pgvector)."""
 
-    def __init__(self, collection) -> None:
-        self.collection = collection
+    def __init__(self, db_pool) -> None:
+        self.db_pool = db_pool
 
     async def bulk_upsert(
         self,
@@ -19,7 +20,7 @@ class EmbeddingRepository:
         model_name: str,
         model_version: str,
     ) -> None:
-        """Upsert embeddings into the ChromaDB collection."""
+        """Upsert embeddings into the chunk_embeddings table."""
         if not chunk_ids:
             return
 
@@ -28,55 +29,43 @@ class EmbeddingRepository:
                 "chunk_ids, parent_doc_ids and embeddings must have the same length"
             )
 
-        metadatas = [
-            {
-                "parent_document_id": pid,
-                "model_name": model_name,
-                "model_version": model_version,
-            }
-            for pid in parent_doc_ids
+        rows = [
+            (cid, pid, np.array(emb, dtype=np.float32), model_name, model_version)
+            for cid, pid, emb in zip(chunk_ids, parent_doc_ids, embeddings)
         ]
 
-        await self.collection.upsert(
-            ids=chunk_ids,
-            embeddings=embeddings,
-            metadatas=metadatas,
-        )
+        async with self.db_pool.acquire() as conn:
+            await conn.executemany(
+                """
+                INSERT INTO chunk_embeddings
+                    (chunk_id, parent_document_id, embedding, model_name, model_version)
+                VALUES ($1::uuid, $2::uuid, $3, $4, $5)
+                ON CONFLICT (chunk_id) DO UPDATE
+                    SET embedding     = EXCLUDED.embedding,
+                        model_name    = EXCLUDED.model_name,
+                        model_version = EXCLUDED.model_version
+                """,
+                rows,
+            )
 
         logger.debug(
-            f"Upserted {len(chunk_ids)} embeddings to ChromaDB "
+            f"Upserted {len(chunk_ids)} embeddings to pgvector "
             f"(model={model_name}, version={model_version})"
         )
 
-    async def get_for_document(self, document_id: str) -> list[dict]:
-        """Return all embeddings for a given parent document."""
-        results = await self.collection.get(
-            where={"parent_document_id": document_id},
-            include=["embeddings", "metadatas"],
-        )
-
-        out: list[dict] = []
-        if results and results.get("ids"):
-            for i, chunk_id in enumerate(results["ids"]):
-                out.append({
-                    "chunk_id": chunk_id,
-                    "parent_document_id": document_id,
-                    "embedding": results["embeddings"][i] if results.get("embeddings") else None,
-                    "model_name": results["metadatas"][i].get("model_name") if results.get("metadatas") else None,
-                    "model_version": results["metadatas"][i].get("model_version") if results.get("metadatas") else None,
-                })
-        return out
-
     async def delete_by_document(self, document_id: str) -> None:
-        """Delete all embeddings for a document from ChromaDB."""
+        """Delete all embeddings for a document from chunk_embeddings."""
         try:
-            await self.collection.delete(
-                where={"parent_document_id": document_id},
-            )
-            logger.debug(f"Deleted embeddings for document {document_id} from ChromaDB")
+            async with self.db_pool.acquire() as conn:
+                await conn.execute(
+                    "DELETE FROM chunk_embeddings WHERE parent_document_id = $1::uuid",
+                    document_id,
+                )
+            logger.debug(f"Deleted embeddings for document {document_id} from pgvector")
         except Exception as exc:
-            logger.warning(f"ChromaDB delete for document {document_id} failed: {exc}")
+            logger.warning(f"pgvector delete for document {document_id} failed: {exc}")
 
     async def count(self) -> int:
-        """Return total number of embeddings in the collection."""
-        return await self.collection.count()
+        """Return total number of embeddings in the table."""
+        async with self.db_pool.acquire() as conn:
+            return await conn.fetchval("SELECT COUNT(*) FROM chunk_embeddings")
