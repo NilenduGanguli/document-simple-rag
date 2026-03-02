@@ -1,5 +1,5 @@
 # =============================================================================
-# docker-compose.4container.yml
+# docker-compose.4container.yml for DEV profile
 #
 # Dev-cluster profile: full RAG functionality in 5 containers.
 #
