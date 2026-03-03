@@ -9,15 +9,15 @@ Strategy
 3. Merge the resulting short segments into final Chunks of at most max_tokens
    with overlap_tokens of context carried over from one chunk to the next.
 
-Token counting uses BertTokenizerFast (bert-base-multilingual-cased by default)
-loaded once at class instantiation.  The tokenizer is CPU-only and thread-safe
-for read operations.
+Token counting uses BertTokenizerFast loaded from the local model volume that
+was already initialised by model-init.  No internet downloads are performed.
 
 Environment variables
 ---------------------
 CHUNK_MAX_TOKENS      Maximum tokens per chunk           (default: 400)
 CHUNK_OVERLAP_TOKENS  Overlap tokens between chunks      (default: 50)
-TOKENIZER_MODEL       HuggingFace tokenizer model name   (default: bert-base-multilingual-cased)
+TOKENIZER_MODEL       Path to the tokenizer directory    (default: /models/embedding/int8)
+MODEL_DEST            Base model directory               (default: /models)
 """
 
 import os
@@ -49,21 +49,17 @@ class RecursiveCharacterSplitter(BaseChunkStrategy):
         self.max_tokens: int = int(os.getenv("CHUNK_MAX_TOKENS", "400"))
         self.overlap_tokens: int = int(os.getenv("CHUNK_OVERLAP_TOKENS", "50"))
 
-        model_name = os.getenv("TOKENIZER_MODEL", "bert-base-multilingual-cased")
-        try:
-            self._tokenizer = BertTokenizerFast.from_pretrained(model_name)
-            logger.info(
-                f"RecursiveCharacterSplitter: tokenizer loaded "
-                f"(model={model_name}, max_tokens={self.max_tokens}, "
-                f"overlap={self.overlap_tokens})"
-            )
-        except Exception as exc:
-            fallback = "bert-base-uncased"
-            logger.warning(
-                f"Could not load tokenizer '{model_name}': {exc}. "
-                f"Falling back to '{fallback}'."
-            )
-            self._tokenizer = BertTokenizerFast.from_pretrained(fallback)
+        # Default to the model volume path set by model-init — no internet access.
+        model_dest = os.getenv("MODEL_DEST", "/models")
+        default_tokenizer = os.path.join(model_dest, "embedding", "int8")
+        tokenizer_path = os.getenv("TOKENIZER_MODEL", default_tokenizer)
+
+        self._tokenizer = BertTokenizerFast.from_pretrained(tokenizer_path)
+        logger.info(
+            f"RecursiveCharacterSplitter: tokenizer loaded "
+            f"(path={tokenizer_path}, max_tokens={self.max_tokens}, "
+            f"overlap={self.overlap_tokens})"
+        )
 
         # Per-call token count cache — cleared at the start of each split() call
         # so memory doesn't accumulate across documents.

@@ -1,11 +1,12 @@
 # =============================================================================
 # docker-compose.4container.yml for DEV profile
 #
-# Dev-cluster profile: full RAG functionality in 5 containers.
+# Dev-cluster profile: full RAG functionality in 6 containers.
 #
 #   postgres   — PostgreSQL 16 with pgvector (standalone)
 #   minio      — MinIO S3-compatible object storage (official image)
 #   minio-init — One-shot bucket initializer (exits after setup)
+#   ocr-api    — Dedicated OCR service (OpenAI Vision API)
 #   backend    — Single unified FastAPI server on port 8000
 #               model-init runs once on first boot.
 #   frontend   — Nginx serving pre-built React SPA + reverse proxy
@@ -86,7 +87,30 @@ services:
       - rag-network
 
   # ---------------------------------------------------------------------------
-  # 4. backend — Unified FastAPI + model-init at startup
+  # 4. ocr-api — dedicated OCR service (OpenAI Vision)
+  # ---------------------------------------------------------------------------
+  ocr-api:
+    build:
+      context: ./ocr-api
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY}    # required — no fallback; compose errors if unset
+      OCR_MODEL:      ${OCR_MODEL:-gpt-4o-mini}
+      OCR_MAX_TOKENS: "3000"
+    ports:
+      - "18002:8002"    # OCR API (optional — dev access)
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+    networks:
+      - rag-network
+
+  # ---------------------------------------------------------------------------
+  # 5. backend — Unified FastAPI + model-init at startup
   # ---------------------------------------------------------------------------
   backend:
     build:
@@ -98,6 +122,8 @@ services:
         condition: service_healthy
       minio-init:
         condition: service_completed_successfully
+      ocr-api:
+        condition: service_healthy
     environment:
       # ── Database ──────────────────────────────────────────────────────────
       DATABASE_URL: postgresql://raguser:${POSTGRES_PASSWORD:-ragpassword123}@postgres:5432/ragdb
@@ -109,14 +135,14 @@ services:
       S3_BUCKET:       rag-documents
       S3_EXTERNAL_URL: http://localhost:19000
 
-      # ── Models ───────────────────────────────────────────────────────────
-      MODEL_DEST:           /models
-      MODEL_VERSION:        local-docker-compose
-      HF_MODEL_NAME:        google-bert/bert-base-uncased
-      HF_HUB_CACHE:         /models/_hf_cache
-      FORCE_REINIT:         ${FORCE_MODEL_REINIT:-false}
-      TRANSFORMERS_OFFLINE: "0"
-      HF_HUB_OFFLINE:       "0"
+      # ── Models — loaded from S3, no internet access ──────────────────────
+      MODEL_DEST:             /models
+      MODEL_VERSION:          local-docker-compose
+      MODEL_S3_KEY_PREFIX:    models/models/bert_uncased_L-12_H-768_A-12
+      HF_HUB_CACHE:           /models/_hf_cache
+      FORCE_REINIT:           ${FORCE_MODEL_REINIT:-false}
+      TRANSFORMERS_OFFLINE:   "1"
+      HF_HUB_OFFLINE:         "1"
 
       # ── Inference ─────────────────────────────────────────────────────────
       ONNX_POOL_SIZE:           "2"
@@ -152,8 +178,9 @@ services:
       JWT_SECRET:            ${JWT_SECRET:-dev-jwt-secret-change-in-production}
       JWT_EXPIRY_HOURS:      "8"
 
-      # ── OpenAI (inline OCR) ───────────────────────────────────────────────
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      # ── OCR (delegated to ocr-api container) ─────────────────────────────
+      OCR_API_URL:           http://ocr-api:8002/ocr
+      OCR_TIMEOUT_SECONDS:   "120"
 
       # ── Tracing (disabled — Jaeger not deployed in dev profile) ──────────
       JAEGER_ENDPOINT: ""
@@ -171,7 +198,7 @@ services:
       - rag-network
 
   # ---------------------------------------------------------------------------
-  # 5. frontend — Nginx + pre-built React SPA
+  # 6. frontend — Nginx + pre-built React SPA
   # ---------------------------------------------------------------------------
   frontend:
     build:

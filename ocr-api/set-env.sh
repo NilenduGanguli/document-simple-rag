@@ -15,7 +15,13 @@ export OPENAI_API_KEY="${OPENAI_API_KEY}"
 #make key from .env file if exists
 if [ -f .env ]; then
   echo "Loading environment variables from .env file..."
-  export $(grep -v '^#' .env | xargs)
+  for line in $(grep -v '^#' .env); do
+    #split the line on '=' to get key and value
+    key=$(echo $line | cut -d '=' -f 1)
+    value=$(echo $line | cut -d '=' -f 2-)
+    export "$key=$value"
+  done
+  # export $(grep -v '^#' .env | xargs)
 fi
 
 # Execute the main container command (CMD)

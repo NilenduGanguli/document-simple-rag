@@ -35,9 +35,10 @@ COPY services/model-init/set-env.sh     /app/model_init/set-env.sh
 RUN chmod +x /app/model_init/set-env.sh
 
 # ---------------------------------------------------------------------------
-# Start script
+# Start script + DB bootstrap
 # ---------------------------------------------------------------------------
-COPY docker/backend/start.sh /app/start.sh
+COPY docker/backend/start.sh    /app/start.sh
+COPY docker/backend/db_ensure.py /app/db_ensure.py
 RUN chmod +x /app/start.sh
 
 # ---------------------------------------------------------------------------
