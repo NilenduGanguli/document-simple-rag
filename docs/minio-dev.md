@@ -49,19 +49,15 @@ minio-init:
 ```sh
 mc alias set myminio http://minio:9000 ${MINIO_ROOT_USER} ${MINIO_ROOT_PASSWORD}
 mc mb --ignore-existing myminio/rag-documents
-mc mb --ignore-existing myminio/rag-models
 ```
 
-This creates two buckets; both `--ignore-existing` so safe to re-run.
+Creates a single bucket; `--ignore-existing` makes it safe to re-run.
+All content — documents and model weights — lives under key prefixes within
+this one bucket.  There is no separate `rag-models` bucket.
 
-| Bucket | Purpose |
-|---|---|
-| `rag-documents` | Uploaded PDFs + embedded model weights (BERT, tokenizer) |
-| `rag-models` | Legacy bucket name — models now live under a prefix in `rag-documents` |
-
-> **Active bucket in the 4-container dev stack:** only `rag-documents` is
-> used.  Documents are stored under `documents/<sha256>/filename.pdf`.
+> Documents are stored under the key prefix `documents/<sha256>/`.
 > Model weights are stored under `models/models/bert_uncased_L-12_H-768_A-12/`.
+> Both share the single `rag-documents` bucket.
 
 ### Backend startup bootstrap (`s3_ensure.py`)
 

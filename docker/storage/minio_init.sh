@@ -12,8 +12,7 @@ until mc alias set myminio "${MINIO_ENDPOINT}" "${MINIO_ROOT_USER}" "${MINIO_ROO
     sleep 5
 done
 
-echo "[minio-init] creating buckets..."
+echo "[minio-init] creating bucket..."
 mc mb --ignore-existing myminio/rag-documents
-mc mb --ignore-existing myminio/rag-models
 
 echo "[minio-init] bucket initialization complete"

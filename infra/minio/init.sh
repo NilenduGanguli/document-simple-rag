@@ -7,8 +7,7 @@ until mc alias set myminio http://minio:9000 ${MINIO_ROOT_USER} ${MINIO_ROOT_PAS
   sleep 5
 done
 
-echo "Creating buckets..."
+echo "Creating bucket..."
 mc mb --ignore-existing myminio/rag-documents
-mc mb --ignore-existing myminio/rag-models
 
 echo "MinIO initialization complete."
