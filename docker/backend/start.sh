@@ -30,6 +30,15 @@ python /app/db_ensure.py
 echo "[backend] database bootstrap done."
 
 # ---------------------------------------------------------------------------
+# S3 / MinIO bootstrap (idempotent — safe on every restart)
+# Ensures the application bucket exists.
+# Set S3_ENDPOINT_URL=  (empty) to use real AWS S3 instead of MinIO.
+# ---------------------------------------------------------------------------
+echo "[backend] bootstrapping S3 bucket..."
+python /app/s3_ensure.py
+echo "[backend] S3 bootstrap done."
+
+# ---------------------------------------------------------------------------
 # Start unified FastAPI server
 # ---------------------------------------------------------------------------
 echo "[backend] starting unified FastAPI server on port 8000..."
