@@ -14,7 +14,7 @@ const MAX_QUERY_CHARS = MAX_TOKENS * CHARS_PER_TOKEN; // 400
 
 export default function QueryForm({ onSubmit, isLoading }: Props) {
   const [query, setQuery] = useState('');
-  const [mode, setMode] = useState<'k_chunks' | 'n_documents'>('k_chunks');
+  const [mode, setMode] = useState<'chunks' | 'documents'>('chunks');
   const [k, setK] = useState(10);
   const [n, setN] = useState(5);
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -39,8 +39,8 @@ export default function QueryForm({ onSubmit, isLoading }: Props) {
     onSubmit({
       query: query.trim(),
       mode,
-      k: mode === 'k_chunks' ? k : undefined,
-      n: mode === 'n_documents' ? n : undefined,
+      k: mode === 'chunks' ? k : undefined,
+      n: mode === 'documents' ? n : undefined,
       config,
     });
   };
@@ -85,15 +85,15 @@ export default function QueryForm({ onSubmit, isLoading }: Props) {
           <label className="text-xs font-medium text-gray-600">Mode:</label>
           <select
             value={mode}
-            onChange={(e) => setMode(e.target.value as 'k_chunks' | 'n_documents')}
+            onChange={(e) => setMode(e.target.value as 'chunks' | 'documents')}
             className="rounded border border-gray-300 px-2 py-1 text-xs focus:border-blue-500 focus:outline-none"
           >
-            <option value="k_chunks">Top-K Chunks</option>
-            <option value="n_documents">Top-N Documents</option>
+            <option value="chunks">Top-K Chunks</option>
+            <option value="documents">Top-N Documents</option>
           </select>
         </div>
 
-        {mode === 'k_chunks' ? (
+        {mode === 'chunks' ? (
           <div className="flex items-center gap-2">
             <label className="text-xs font-medium text-gray-600">K:</label>
             <input

@@ -7,8 +7,9 @@
 # image without needing Node.js.
 #
 # Usage:
-#   ./scripts/build-frontend.sh            # build + sync
-#   ./scripts/build-frontend.sh --docker   # also rebuild & restart the container
+#   ./scripts/build-frontend.sh                # build + sync dist only
+#   ./scripts/build-frontend.sh --docker       # also rebuild container (docker-compose.yml)
+#   ./scripts/build-frontend.sh --docker-dev   # also rebuild container (docker-compose.4container.yml)
 # ──────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
@@ -61,11 +62,16 @@ echo "==> frontend-compiled/ ready:"
 ls -lh "$OUT_DIR/dist/"
 
 # ── 5. (Optional) Rebuild & restart Docker container ─────────────────────────
-if [ "${1:-}" = "--docker" ]; then
+if [ "${1:-}" = "--docker" ] || [ "${1:-}" = "--docker-dev" ]; then
   echo "==> Rebuilding and restarting frontend container…"
   cd "$REPO_ROOT"
-  docker compose build frontend
-  docker compose up -d frontend
+  if [ "${1:-}" = "--docker-dev" ]; then
+    COMPOSE_FILE="docker-compose.4container.yml"
+  else
+    COMPOSE_FILE="docker-compose.yml"
+  fi
+  docker compose -f "$COMPOSE_FILE" build --no-cache frontend
+  docker compose -f "$COMPOSE_FILE" up -d frontend
   echo "==> Frontend container restarted."
 fi
 

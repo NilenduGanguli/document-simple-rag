@@ -40,8 +40,8 @@ export default function RetrievePage() {
       {results && (
         <>
           <PipelineDecisions
-            latencyBreakdown={results.latency_breakdown}
-            entitiesDetected={results.entities_detected}
+            latencyBreakdown={results.latency}
+            entitiesDetected={results.entities}
           />
           <RetrievalResults
             response={results}

@@ -124,7 +124,7 @@ export interface RetrievalConfig {
 
 export interface RetrievalRequest {
   query: string;
-  mode: 'k_chunks' | 'n_documents';
+  mode: 'chunks' | 'documents';
   k?: number;
   n?: number;
   config?: RetrievalConfig;
@@ -153,13 +153,13 @@ export interface DocumentResult {
 
 export interface RetrievalResponse {
   query: string;
+  processed_query: string;
   mode: string;
   audit_id: string;
-  results_k_chunks: ChunkResult[] | null;
-  results_n_documents: DocumentResult[] | null;
-  total_results: number;
-  latency_breakdown: Record<string, number>;
-  entities_detected: string[];
+  chunks: ChunkResult[] | null;
+  documents: DocumentResult[] | null;
+  latency: Record<string, number>;
+  entities: string[];
 }
 
 // ── Stats types ─────────────────────────────────────────────────────────────

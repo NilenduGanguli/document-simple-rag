@@ -3,26 +3,27 @@ import ChunkCard from './ChunkCard';
 
 interface Props {
   response: RetrievalResponse;
-  /** docId → filename lookup — used to show filename on chunks in k_chunks mode */
+  /** docId → filename lookup — used to show filename on chunks in chunks mode */
   docNameMap: Record<string, string>;
   /** Navigate to Explorer and focus this chunk */
   onViewDocument: (docId: string, chunkId: string) => void;
-  /** Open the PDF preview for this document (n_documents mode only) */
+  /** Open the PDF preview for this document (documents mode only) */
   onViewPDF: (docId: string) => void;
 }
 
 export default function RetrievalResults({ response, docNameMap, onViewDocument, onViewPDF }: Props) {
-  if (response.mode === 'k_chunks' && response.results_k_chunks) {
+  if (response.mode === 'chunks' && response.chunks) {
+    const count = response.chunks.length;
     return (
       <div>
         <div className="mb-3 flex items-center justify-between">
           <h4 className="text-sm font-semibold text-gray-700">
-            {response.total_results} chunk{response.total_results !== 1 ? 's' : ''} retrieved
+            {count} chunk{count !== 1 ? 's' : ''} retrieved
           </h4>
           <span className="text-xs text-gray-400">audit: {response.audit_id.slice(0, 8)}</span>
         </div>
         <div className="space-y-3">
-          {response.results_k_chunks.map((chunk, i) => (
+          {response.chunks.map((chunk, i) => (
             <ChunkCard
               key={chunk.chunk_id || i}
               chunk={chunk}
@@ -37,17 +38,18 @@ export default function RetrievalResults({ response, docNameMap, onViewDocument,
     );
   }
 
-  if (response.mode === 'n_documents' && response.results_n_documents) {
+  if (response.mode === 'documents' && response.documents) {
+    const count = response.documents.length;
     return (
       <div>
         <div className="mb-3 flex items-center justify-between">
           <h4 className="text-sm font-semibold text-gray-700">
-            {response.total_results} document{response.total_results !== 1 ? 's' : ''} retrieved
+            {count} document{count !== 1 ? 's' : ''} retrieved
           </h4>
           <span className="text-xs text-gray-400">audit: {response.audit_id.slice(0, 8)}</span>
         </div>
         <div className="space-y-6">
-          {response.results_n_documents.map((doc) => (
+          {response.documents.map((doc) => (
             <div key={doc.parent_document_id} className="rounded-lg border border-gray-200 bg-white p-4">
               <div className="mb-3 flex items-center justify-between">
                 <div>
