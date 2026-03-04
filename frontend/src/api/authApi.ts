@@ -1,7 +1,8 @@
+import { apiClient } from './client';
 import type { LoginResponse, AuthUser, AuthConfig } from '../types';
 
 export async function login(username: string, password: string): Promise<LoginResponse> {
-  const res = await fetch('/api/auth/login', {
+  const res = await fetch(apiClient.resolveUrl('/api/auth/login'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ username, password }),
@@ -14,7 +15,7 @@ export async function login(username: string, password: string): Promise<LoginRe
 }
 
 export async function getMe(token: string): Promise<AuthUser> {
-  const res = await fetch('/api/auth/me', {
+  const res = await fetch(apiClient.resolveUrl('/api/auth/me'), {
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!res.ok) {
@@ -24,7 +25,7 @@ export async function getMe(token: string): Promise<AuthUser> {
 }
 
 export async function getAuthConfig(): Promise<AuthConfig> {
-  const res = await fetch('/api/auth/config');
+  const res = await fetch(apiClient.resolveUrl('/api/auth/config'));
   if (!res.ok) {
     return { environment: 'DEV', auth_method: 'credentials' };
   }

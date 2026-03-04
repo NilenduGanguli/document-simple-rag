@@ -7,8 +7,9 @@ import IngestPage from './pages/IngestPage';
 import RetrievePage from './pages/RetrievePage';
 import ExplorePage from './pages/ExplorePage';
 import AdminPage from './pages/AdminPage';
+import SettingsPage from './pages/SettingsPage';
 
-const KNOWN_PATHS = ['/', '/ingest', '/retrieve', '/explore', '/admin'];
+const KNOWN_PATHS = ['/', '/ingest', '/retrieve', '/explore', '/admin', '/settings'];
 
 /**
  * Renders all pages simultaneously and shows/hides them with CSS so that
@@ -31,6 +32,7 @@ function Pages() {
         <ExplorePage />
       </div>
       <div style={vis('/admin')}><AdminPage /></div>
+      <div style={vis('/settings')}><SettingsPage /></div>
       {!KNOWN_PATHS.includes(pathname) && <Navigate to="/" replace />}
     </>
   );
